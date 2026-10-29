@@ -211,3 +211,43 @@ fn file_cli_handles_unicode_and_spaces_without_mutation() {
     assert!(!result.status.success());
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn verifies_plain_resource_and_rejects_changed_content() {
+    let mut bytes = fixture();
+    let payload_offset = bytes.len() as u64;
+    bytes.extend_from_slice(b"abc");
+    descriptor(&mut bytes, 216, payload_offset, 3, 0);
+    bytes[246..266].copy_from_slice(&[
+        0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78, 0x50, 0xc2,
+        0x6c, 0x9c, 0xd0, 0xd8, 0x9d,
+    ]);
+    let mut wim = Wim::open(Cursor::new(bytes.clone())).unwrap();
+    let entry = wim.lookup_entry(0).unwrap();
+    assert_eq!(wim.read_verified(&entry).unwrap(), b"abc");
+    *bytes.last_mut().unwrap() = b'd';
+    let mut wim = Wim::open(Cursor::new(bytes)).unwrap();
+    let entry = wim.lookup_entry(0).unwrap();
+    assert!(wim.read_verified(&entry).is_err());
+    assert!(wim.lookup_entry(1).is_err());
+}
+
+#[test]
+fn parses_directory_entries_and_rejects_bad_offsets() {
+    let mut data = vec![0u8; 240];
+    put32(&mut data, 0, 8);
+    data[8..16].copy_from_slice(&104u64.to_le_bytes());
+    put32(&mut data, 16, 0x10);
+    data[24..32].copy_from_slice(&120u64.to_le_bytes());
+    data[120..128].copy_from_slice(&112u64.to_le_bytes());
+    data[220..222].copy_from_slice(&6u16.to_le_bytes());
+    for (i, ch) in "abc".encode_utf16().enumerate() {
+        data[222 + i * 2..224 + i * 2].copy_from_slice(&ch.to_le_bytes());
+    }
+    let result = rust_image_tool::find_image_path(&data, "abc").unwrap();
+    assert_eq!(result.name, "abc");
+    assert!(rust_image_tool::find_image_path(&data, "../abc").is_err());
+    assert!(rust_image_tool::directory_entries(&data, usize::MAX).is_err());
+    data[220..222].copy_from_slice(&255u16.to_le_bytes());
+    assert!(rust_image_tool::find_image_path(&data, "abc").is_err());
+}

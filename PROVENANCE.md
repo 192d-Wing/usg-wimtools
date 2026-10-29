@@ -31,10 +31,24 @@ the tool. No external implementation source is included. If strict personnel
 separation is required, establish an independent specification/implementation
 process before extending or adopting this prototype.
 
+The LZX decoder uses Microsoft's published LZX Delta description for shared
+Huffman, match, and E8 concepts, with WIM-specific differences informed by
+publicly available format descriptions and observable WIM data:
+
+https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-patch/
+https://github.com/libyal/libfwnt/blob/main/documentation/Compression%20methods.asciidoc
+
+Search results during this work also exposed code excerpts and comments from
+other LZX implementations, including WIM-specific block sizes and offset-table
+facts. No code was copied, but the developer saw those excerpts. This project
+does not claim formal clean-room separation. SHA-1 is implemented for WIM format
+interoperability, not as an authenticity mechanism.
+
 ## Compatibility evidence
 
-Automated tests cover locally generated synthetic envelopes. Manual inspection
-also ran against the install and boot WIMs inside the user's Windows 11 ISO;
+Automated tests cover locally generated synthetic envelopes. Manual inspection,
+resource verification, and a single file extraction also ran against the install
+and boot WIMs inside the user's Windows 11 ISO;
 see [VALIDATION.md](VALIDATION.md). This revealed that plain XML and lookup
 resources can carry the metadata bit. The independently written flag check
 was corrected and a synthetic regression test was added. No Windows boot,

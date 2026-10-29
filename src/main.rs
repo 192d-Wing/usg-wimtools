@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nImage writing and driver injection are not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nImage writing and driver injection are not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -16,12 +16,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(out, "{HELP}")?;
         return Ok(());
     }
-    if args.len() != 2 {
+    if args.len() != 2
+        && !(args.len() == 3 && args[0] == "verify-resource")
+        && !(args.len() == 4 && args[0] == "extract-resource")
+        && !(args.len() == 5 && args[0] == "extract-file")
+    {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
     }
     let command = args[0].to_str().ok_or("invalid command encoding")?;
-    if !matches!(command, "info" | "xml" | "check-structure") {
+    if !matches!(
+        command,
+        "info"
+            | "xml"
+            | "check-structure"
+            | "verify-resource"
+            | "extract-resource"
+            | "extract-file"
+    ) {
         return Err(format!("unsupported command: {command}\n\n{HELP}").into());
+    }
+    if command == "verify-resource" && args.len() != 3 {
+        return Err("verify-resource requires a lookup index".into());
+    }
+    if command == "extract-resource" && args.len() != 4 {
+        return Err("extract-resource requires an index and output path".into());
+    }
+    if command == "extract-file" && args.len() != 5 {
+        return Err("extract-file requires an image index, image path, and output path".into());
+    }
+    if command != "verify-resource"
+        && command != "extract-resource"
+        && command != "extract-file"
+        && args.len() != 2
+    {
+        return Err("unexpected argument".into());
     }
     let mut wim = Wim::open(File::open(&args[1])?)?;
     match command {
@@ -58,6 +86,48 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "xml" => {
             write!(out, "{}", wim.xml_text()?)?;
+        }
+        "extract-file" => {
+            let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
+            let path = args[3].to_str().ok_or("invalid image path")?;
+            let metadata = wim.image_metadata(index)?;
+            let entry = rust_image_tool::find_image_path(&metadata, path)?;
+            if entry.attributes & (0x10 | 0x400) != 0 {
+                return Err("requested path is a directory or reparse point".into());
+            }
+            let data = if entry.hash == [0; 20] {
+                Vec::new()
+            } else {
+                let resource = wim.find_hash(&entry.hash)?;
+                wim.read_verified(&resource)?
+            };
+            let mut dest = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&args[4])?;
+            dest.write_all(&data)?;
+            writeln!(
+                out,
+                "Extracted {} bytes from image {index}; resource SHA-1 verified (empty files have no resource hash).",
+                data.len()
+            )?;
+        }
+        "verify-resource" | "extract-resource" => {
+            let index: u64 = args[2].to_str().ok_or("invalid index")?.parse()?;
+            let entry = wim.lookup_entry(index)?;
+            let data = wim.read_verified(&entry)?;
+            if command == "extract-resource" {
+                let mut dest = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&args[3])?;
+                dest.write_all(&data)?;
+            }
+            writeln!(
+                out,
+                "Verified lookup resource {index}: {} bytes, SHA-1 matches.",
+                data.len()
+            )?;
         }
         "check-structure" => {
             let report = wim.check_structure()?;

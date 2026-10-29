@@ -7,18 +7,33 @@ are used by the implementation. Unsafe Rust is forbidden.
 
 ## Current milestone
 
-This is a **read-only WIM inspector**, not a complete DISM replacement.
-It cannot yet build the Dell Windows 11 image or inject drivers.
+This is an **experimental, read-only WIM inspector and file extractor**, not a
+complete DISM replacement. It cannot build the Dell image or inject drivers.
 
 ```sh
 cargo run -- info /path/to/install.wim
 cargo run -- xml /path/to/install.wim
 cargo run -- check-structure /path/to/install.wim
+cargo run -- verify-resource /path/to/install.wim 0
+cargo run -- extract-file /path/to/install.wim 6 Windows/System32/notepad.exe ./notepad.exe
 ```
 
 Quote paths containing spaces. These commands also work in PowerShell with
 Windows paths. `xml` emits decoded XML text; it does not parse XML or list
 Windows editions separately. `info` exposes header fields and resource locations.
+`verify-resource` takes a zero-based lookup-table ordinal. `extract-file` takes
+a one-based image index and slash-separated image path; it verifies both image
+metadata and file resources against their WIM SHA-1 values before creating the
+output file. It will not overwrite an existing file. `extract-resource` can
+write an individual verified lookup resource given its zero-based ordinal.
+Resources larger than 128 MiB are currently unsupported. No ACLs, timestamps,
+alternate streams, hard-link relationships, or other Windows metadata are
+restored; reparse points cannot be extracted or traversed. Path matching is
+ASCII case-insensitive and otherwise exact.
+
+These SHA-1 checks detect mismatches with hashes stored in the WIM; they do not
+authenticate the WIM or verify its provenance. A failed write can leave a partial
+new output file. Extraction is experimental and is not an image deployment tool.
 
 `check-structure` checks the classic WIM header, compression-field consistency,
 resource bounds, lookup-record lengths and parts, metadata resource count,
@@ -31,7 +46,9 @@ A successful check only covers the stated structural checks.
 
 Checking is limited to version `0x00010d00`, single-part ordinary WIM files,
 uncompressed or classic 32-KiB XPRESS/LZX container layouts. No decompressor
-is implemented. ESD/LZMS, solid resources, split WIM, resource-only images,
+is implemented for the structural check. File/resource reading supports LZX and
+uncompressed resources; XPRESS decoding is not implemented. ESD/LZMS, solid
+resources, split WIM, resource-only images,
 unknown flags/versions, and nonclassic compression layouts are unsupported
 for checking. Header inspection can still expose some unsupported variants.
 
@@ -52,8 +69,9 @@ Only macOS has been exercised locally; the CI matrix covers all three platforms.
 
 ## Roadmap toward the Dell image
 
-1. Establish a Windows-generated fixture corpus and compare inspection results.
-2. Implement resource hash checks and compression with independent test vectors.
+1. Expand the Windows-generated fixture corpus, independent test vectors and
+   cross-platform compatibility tests for LZX and resource decoding.
+2. Implement streaming verification for resources larger than 128 MiB.
 3. Parse and preserve directory metadata, ACLs, hard links, alternate streams,
    reparse points, and image XML; validate lossless round trips.
 4. Implement transactional WIM export/write operations with crash recovery.

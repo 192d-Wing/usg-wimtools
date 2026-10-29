@@ -32,7 +32,19 @@ Verification: 11 automated tests passed, Clippy with warnings denied passed,
 formatting passed, and the release build passed. Windows/Linux CI has not
 been run from this local repository.
 
-These are structural checks only. Resource hashes, decompression, metadata
-contents, XML semantics, source authenticity, Windows Setup, bootability,
-and driver installation have not been verified. The ISO filename and XML
+Subsequent LZX work verified 10 selected install WIM resources and 6 selected
+boot WIM resources against their stored SHA-1 values, including several large
+metadata resources. The tool decoded the metadata for install image 6 and
+extracted `Windows/System32/notepad.exe` (360,448 bytes). Its SHA-1 matched
+both the WIM lookup record and the macOS `shasum` result:
+`76cd26b59923157e09d2bc927ba8fb059f3155dc`. The file was identified as an x64
+Windows PE executable. Source WIMs were read only. This samples resources; it
+does not validate all resources or establish authenticity. The automated suite
+now covers hash test vectors, malformed inputs, basic LZX blocks, and metadata
+path traversal; it does not include a real Windows WIM fixture.
+
+The original structural check remains limited; the separate sampled resource
+checks and extraction do not validate every resource, all metadata, XML
+semantics, source authenticity, Windows Setup, bootability, or driver
+installation. The ISO filename and XML
 are observed metadata, not independent proof of source authenticity.

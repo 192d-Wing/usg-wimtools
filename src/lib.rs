@@ -289,3 +289,276 @@ impl<R: Read + Seek> Wim<R> {
         })
     }
 }
+
+mod lzx;
+mod sha1;
+
+#[derive(Clone, Debug)]
+pub struct LookupEntry {
+    pub resource: Resource,
+    pub hash: [u8; 20],
+    pub part: u16,
+}
+impl<R: Read + Seek> Wim<R> {
+    /// Read a specific lookup record by its zero-based ordinal.
+    pub fn lookup_entry(&mut self, index: u64) -> io::Result<LookupEntry> {
+        self.header.check_supported()?;
+        let table = self.header.lookup;
+        table.require_plain("lookup")?;
+        if !table.stored_size.is_multiple_of(50) || index >= table.stored_size / 50 {
+            return Err(invalid("lookup index out of range"));
+        }
+        self.reader
+            .seek(SeekFrom::Start(table.offset + index * 50))?;
+        let mut raw = [0u8; 50];
+        self.reader.read_exact(&mut raw)?;
+        let entry = LookupEntry {
+            resource: Resource::parse(&raw[..24]),
+            part: u16_at(&raw, 24),
+            hash: raw[30..50].try_into().unwrap(),
+        };
+        if entry.part != 1 || entry.resource.flags & !0x06 != 0 || entry.resource.is_absent() {
+            return Err(unsupported("unsupported lookup entry"));
+        }
+        entry
+            .resource
+            .check_bounds(self.file_size, "lookup entry")?;
+        Ok(entry)
+    }
+    /// Decode and SHA-1 verify one lookup resource, in memory, capped at 128 MiB.
+    pub fn read_verified(&mut self, entry: &LookupEntry) -> io::Result<Vec<u8>> {
+        self.header.check_supported()?;
+        let r = entry.resource;
+        if entry.part != 1 || r.flags & !0x06 != 0 || r.is_absent() {
+            return Err(unsupported("unsupported resource"));
+        }
+        r.check_bounds(self.file_size, "resource")?;
+        const LIMIT: u64 = 128 * 1024 * 1024;
+        if r.original_size > LIMIT || r.stored_size > LIMIT {
+            return Err(unsupported("resource exceeds 128 MiB limit"));
+        }
+        self.reader.seek(SeekFrom::Start(r.offset))?;
+        let mut stored = vec![0; r.stored_size as usize];
+        self.reader.read_exact(&mut stored)?;
+        let mut output = Vec::with_capacity(r.original_size as usize);
+        if r.flags & 4 == 0 {
+            r.require_plain("resource")?;
+            output = stored;
+        } else {
+            if self.header.flags & 0x0006_0000 != 0x0004_0000 || self.header.chunk_size != 32768 {
+                return Err(unsupported(
+                    "only 32 KiB LZX resource decoding is supported",
+                ));
+            }
+            let count = r.original_size.div_ceil(32768) as usize;
+            if count == 0 {
+                return Err(invalid("empty compressed resource"));
+            }
+            let width = if r.original_size > u32::MAX as u64 {
+                8
+            } else {
+                4
+            };
+            let table_size = (count - 1)
+                .checked_mul(width)
+                .ok_or_else(|| invalid("chunk table overflow"))?;
+            if table_size > stored.len() {
+                return Err(invalid("truncated chunk table"));
+            }
+            let data = &stored[table_size..];
+            let mut start = 0usize;
+            for i in 0..count {
+                let end = if i + 1 == count {
+                    data.len()
+                } else if width == 4 {
+                    u32_at(&stored, i * width) as usize
+                } else {
+                    usize::try_from(u64_at(&stored, i * width))
+                        .map_err(|_| invalid("chunk offset too large"))?
+                };
+                if end < start || end > data.len() {
+                    return Err(invalid("invalid chunk table offset"));
+                }
+                let expected = (r.original_size as usize - output.len()).min(32768);
+                let chunk = &data[start..end];
+                if chunk.len() == expected {
+                    output.extend_from_slice(chunk);
+                } else if chunk.len() < expected {
+                    output.extend_from_slice(&lzx::decompress(chunk, expected)?);
+                } else {
+                    return Err(invalid("compressed chunk larger than output"));
+                }
+                start = end;
+            }
+        }
+        if output.len() as u64 != r.original_size {
+            return Err(invalid("resource size mismatch"));
+        }
+        if sha1::digest(&output) != entry.hash {
+            return Err(invalid("resource SHA-1 mismatch"));
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Debug)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub attributes: u32,
+    pub children_offset: u64,
+    pub hash: [u8; 20],
+}
+impl<R: Read + Seek> Wim<R> {
+    /// Metadata lookup entries follow image order for ordinary, single-part WIMs.
+    pub fn image_metadata(&mut self, image: u32) -> io::Result<Vec<u8>> {
+        if image == 0 || image > self.header.image_count {
+            return Err(invalid("image index out of range"));
+        }
+        let mut seen = 0;
+        let count = self.header.lookup.stored_size / 50;
+        for i in 0..count {
+            let entry = self.lookup_entry(i)?;
+            if entry.resource.flags & 2 != 0 {
+                seen += 1;
+                if seen == image {
+                    return self.read_verified(&entry);
+                }
+            }
+        }
+        Err(invalid("image metadata resource missing"))
+    }
+    pub fn find_hash(&mut self, hash: &[u8; 20]) -> io::Result<LookupEntry> {
+        for i in 0..self.header.lookup.stored_size / 50 {
+            let e = self.lookup_entry(i)?;
+            if &e.hash == hash {
+                return Ok(e);
+            }
+        }
+        Err(invalid("file resource not found in lookup table"))
+    }
+}
+/// List one directory in a verified image metadata resource. Does not interpret
+/// security descriptors or alternate stream content.
+pub fn directory_entries(metadata: &[u8], offset: usize) -> io::Result<Vec<DirectoryEntry>> {
+    let mut pos = offset;
+    let mut entries = Vec::new();
+    loop {
+        let head = metadata
+            .get(
+                pos..pos
+                    .checked_add(8)
+                    .ok_or_else(|| invalid("directory offset overflow"))?,
+            )
+            .ok_or_else(|| invalid("truncated directory"))?;
+        let len = u64_at(head, 0);
+        if len == 0 {
+            return Ok(entries);
+        }
+        let len = usize::try_from(len).map_err(|_| invalid("entry too large"))?;
+        if len < 102 {
+            return Err(invalid("short directory entry"));
+        }
+        let end = pos
+            .checked_add(len)
+            .ok_or_else(|| invalid("directory entry overflow"))?;
+        let entry = metadata
+            .get(pos..end)
+            .ok_or_else(|| invalid("truncated directory entry"))?;
+        let streams = u16_at(entry, 96);
+        let name_len = usize::from(u16_at(entry, 100));
+        if !name_len.is_multiple_of(2) || 102 + name_len > entry.len() {
+            return Err(invalid("invalid directory name length"));
+        }
+        let units: Vec<u16> = entry[102..102 + name_len]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let name = String::from_utf16(&units).map_err(|_| invalid("invalid UTF-16 filename"))?;
+        if name.contains(['/', '\\', '\0']) {
+            return Err(invalid("invalid WIM filename"));
+        }
+        entries.push(DirectoryEntry {
+            name,
+            attributes: u32_at(entry, 8),
+            children_offset: u64_at(entry, 16),
+            hash: entry[64..84].try_into().unwrap(),
+        });
+        pos = end;
+        for _ in 0..streams {
+            let head = metadata
+                .get(
+                    pos..pos
+                        .checked_add(8)
+                        .ok_or_else(|| invalid("stream overflow"))?,
+                )
+                .ok_or_else(|| invalid("truncated stream entry"))?;
+            let size = usize::try_from(u64_at(head, 0)).map_err(|_| invalid("stream too large"))?;
+            if size < 38 {
+                return Err(invalid("short alternate stream entry"));
+            }
+            pos = pos
+                .checked_add(size)
+                .filter(|&p| p <= metadata.len())
+                .ok_or_else(|| invalid("truncated stream entry"))?;
+        }
+        if entries.len() > 1_000_000 {
+            return Err(unsupported("directory entry limit exceeded"));
+        }
+    }
+}
+pub fn root_offset(metadata: &[u8]) -> io::Result<usize> {
+    if metadata.len() < 8 {
+        return Err(invalid("truncated security metadata"));
+    }
+    let size = u32_at(metadata, 0) as usize;
+    if size < 8 {
+        return Err(invalid("invalid security table length"));
+    }
+    let offset = size
+        .checked_add(7)
+        .ok_or_else(|| invalid("security size overflow"))?
+        & !7;
+    if offset >= metadata.len() {
+        return Err(invalid("root entry outside metadata"));
+    }
+    Ok(offset)
+}
+/// Resolve a slash-separated image path. Reparse points are not traversed.
+pub fn find_image_path(metadata: &[u8], path: &str) -> io::Result<DirectoryEntry> {
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty()
+        || parts
+            .iter()
+            .any(|p| *p == "." || *p == ".." || p.contains('\\'))
+    {
+        return Err(invalid("invalid image path"));
+    }
+    let root = directory_entries(metadata, root_offset(metadata)?)?;
+    let mut next = root
+        .first()
+        .ok_or_else(|| invalid("missing image root"))?
+        .children_offset;
+    for (i, part) in parts.iter().enumerate() {
+        let offset = usize::try_from(next).map_err(|_| invalid("directory offset too large"))?;
+        if offset == 0 {
+            return Err(invalid("image path not found"));
+        }
+        let entries = directory_entries(metadata, offset)?;
+        let entry = entries
+            .into_iter()
+            .find(|e| e.name.eq_ignore_ascii_case(part))
+            .ok_or_else(|| invalid(format!("image path component not found: {part}")))?;
+        if i + 1 == parts.len() {
+            return Ok(entry);
+        }
+        if entry.attributes & 0x10 == 0 || entry.attributes & 0x400 != 0 {
+            return Err(invalid(
+                "image path contains a non-directory or reparse point",
+            ));
+        }
+        next = entry.children_offset;
+    }
+    Err(invalid("image path not found"))
+}
