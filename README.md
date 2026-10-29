@@ -44,8 +44,10 @@ cargo test
 cargo build --release
 ```
 
-Tests use synthetic binary envelopes, including malformed input and a CLI
-read-only check. They do not establish Windows 11 interoperability.
+Automated tests use synthetic binary envelopes, including malformed input and a
+CLI read-only check. Manual inspection also passed on real Windows 11 install
+and boot WIMs; see [VALIDATION.md](VALIDATION.md). Neither establishes deployment
+or driver-servicing compatibility.
 Only macOS has been exercised locally; the CI matrix covers all three platforms.
 
 ## Roadmap toward the Dell image

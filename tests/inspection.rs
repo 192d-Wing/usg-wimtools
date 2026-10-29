@@ -45,6 +45,16 @@ fn reads_header_xml_and_resource_ranges() {
 }
 
 #[test]
+fn accepts_metadata_flag_on_plain_lookup_and_xml_resources() {
+    let mut bytes = fixture();
+    bytes[55] = 2;
+    bytes[79] = 2;
+    let mut wim = Wim::open(Cursor::new(bytes)).unwrap();
+    assert!(wim.xml_text().unwrap().contains("Test 🦀"));
+    assert_eq!(wim.check_structure().unwrap().metadata_entries, 1);
+}
+
+#[test]
 fn rejects_every_truncated_header_without_panicking() {
     let bytes = fixture();
     for end in 0..HEADER_SIZE {

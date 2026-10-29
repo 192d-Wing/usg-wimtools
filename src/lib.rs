@@ -61,7 +61,9 @@ impl Resource {
     }
 
     fn require_plain(self, name: &str) -> io::Result<()> {
-        if self.flags != 0 {
+        // The metadata bit does not imply compression. Windows-generated
+        // lookup and XML resources can carry it even when stored verbatim.
+        if self.flags & !0x02 != 0 {
             return Err(unsupported(format!(
                 "{name}: resource flags 0x{:02x} are unsupported",
                 self.flags

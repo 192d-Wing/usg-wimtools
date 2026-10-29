@@ -33,6 +33,9 @@ process before extending or adopting this prototype.
 
 ## Compatibility evidence
 
-Current tests cover only locally generated synthetic envelopes. No Windows ISO,
-Dell driver package, or Windows-generated WIM has been tested. No Windows
-boot or driver-injection compatibility is claimed.
+Automated tests cover locally generated synthetic envelopes. Manual inspection
+also ran against the install and boot WIMs inside the user's Windows 11 ISO;
+see [VALIDATION.md](VALIDATION.md). This revealed that plain XML and lookup
+resources can carry the metadata bit. The independently written flag check
+was corrected and a synthetic regression test was added. No Windows boot,
+driver package extraction, or driver-injection compatibility is claimed.
