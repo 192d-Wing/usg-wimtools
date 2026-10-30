@@ -123,14 +123,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let snapshot = rust_image_tool::manifest::load(std::path::Path::new(&args[4]))?;
         let mut wim = Wim::open(File::open(&args[1])?)?;
         wim.check_structure()?;
+        if wim.header.image_count != 1 {
+            return Err("package audit requires the current single-image WIM export".into());
+        }
         if index == 0 || index > wim.header.image_count {
             return Err("image index out of range".into());
         }
         let target = rust_image_tool::servicing::parse_target(&wim.xml_text()?, index)?;
         writeln!(
             out,
-            "Image metadata: architecture {}, Windows {}.{}, build {}",
-            target.architecture, target.major, target.minor, target.build
+            "Image metadata: architecture {}, Windows {}.{}, build {}, edition {}, installation type {}, product type {}",
+            target.architecture,
+            target.major,
+            target.minor,
+            target.build,
+            target.edition,
+            target.installation_type,
+            target.product_type
         )?;
         writeln!(
             out,

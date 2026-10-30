@@ -19,6 +19,9 @@ pub struct ImageTarget {
     pub major: u32,
     pub minor: u32,
     pub build: u32,
+    pub edition: String,
+    pub installation_type: String,
+    pub product_type: String,
 }
 fn one_child<'a, 'input>(
     parent: roxmltree::Node<'a, 'input>,
@@ -68,11 +71,21 @@ pub fn parse_target(xml: &str, index: u32) -> io::Result<ImageTarget> {
             .parse()
             .map_err(|_| invalid(format!("invalid {field}")))
     };
+    let text = |n: roxmltree::Node<'_, '_>, field: &str| -> io::Result<String> {
+        Ok(one_child(n, field)?
+            .text()
+            .ok_or_else(|| invalid(format!("empty {field}")))?
+            .trim()
+            .to_owned())
+    };
     Ok(ImageTarget {
         architecture: number(windows, "ARCH")?,
         major: number(version, "MAJOR")?,
         minor: number(version, "MINOR")?,
         build: number(version, "BUILD")?,
+        edition: text(windows, "EDITIONID")?,
+        installation_type: text(windows, "INSTALLATIONTYPE")?,
+        product_type: text(windows, "PRODUCTTYPE")?,
     })
 }
 impl ImageTarget {
@@ -82,6 +95,9 @@ impl ImageTarget {
             && self.major == 10
             && self.minor == 0
             && self.build == snapshot.windows_build
+            && self.edition.eq_ignore_ascii_case("Professional")
+            && self.installation_type.eq_ignore_ascii_case("Client")
+            && self.product_type.eq_ignore_ascii_case("WinNT")
     }
 }
 
@@ -157,7 +173,7 @@ mod tests {
     use super::*;
     #[test]
     fn target_xml_rejects_ambiguity_and_mismatch() {
-        let xml = "<WIM><IMAGE INDEX=\"1\"><WINDOWS><ARCH>9</ARCH><VERSION><MAJOR>10</MAJOR><MINOR>0</MINOR><BUILD>26300</BUILD></VERSION></WINDOWS></IMAGE></WIM>";
+        let xml = "<WIM><IMAGE INDEX=\"1\"><WINDOWS><ARCH>9</ARCH><EDITIONID>Professional</EDITIONID><INSTALLATIONTYPE>Client</INSTALLATIONTYPE><PRODUCTTYPE>WinNT</PRODUCTTYPE><VERSION><MAJOR>10</MAJOR><MINOR>0</MINOR><BUILD>26300</BUILD></VERSION></WINDOWS></IMAGE></WIM>";
         assert_eq!(
             parse_target(xml, 1).unwrap(),
             ImageTarget {
