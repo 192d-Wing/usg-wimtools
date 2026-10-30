@@ -79,6 +79,15 @@ The local Dell hardware ID and firmware configuration were not available;
 this does not establish device applicability. The tool does not resolve all
 INF directives or validate signatures, and no drivers were staged or injected.
 
+The later `match-inf` prototype examined declared model sections in the same
+Intel RST INF. For the illustrative `PCI\VEN_8086&DEV_7D0B` and Windows build
+26300 it reported `INTEL.NTamd64.10.0...19041` and install base `VMD_inst`;
+at build 18000 it reported no candidate. For illustrative ID
+`PCI\VEN_8086&DEV_09AB` it reported `VMD_dummy_function_inst`. Synthetic tests
+cover matching, architecture, minimum builds, substitutions, unsupported
+decorations, and ignoring undeclared model sections. These are candidate results,
+not Windows SetupAPI or target-device verification.
+
 ## Read-only registry inspection
 
 The tool extracted the 10 MiB SYSTEM hive from exported Windows 11 Pro image 1,

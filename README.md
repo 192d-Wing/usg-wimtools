@@ -21,6 +21,7 @@ cargo run -- export-image /path/to/install.wim 6 ./windows11-pro.wim
 cargo run -- replace-file /path/to/single-image.wim Windows/example.bin ./replacement.bin ./new.wim
 cargo run -- inspect-inf /path/to/iaStorVD.inf
 cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
+cargo run -- match-inf /path/to/iaStorVD.inf 'PCI\VEN_8086&DEV_7D0B' 26300
 cargo run -- hive-list /path/to/SYSTEM Select
 cargo run -- hive-get /path/to/SYSTEM Select Current
 cargo run -- hive-copy-set-dword /path/to/test.hive Example ValueName 42 ./test-copy.hive
@@ -102,6 +103,17 @@ the full dependency graph. IDs from any INF section are candidates only, so
 results may include false positives and may miss substituted IDs. Non-ASCII
 legacy text is decoded lossily and flagged. A skipped symlink is reported, and
 an unreadable or malformed INF stops the scan. UTF-16 and UTF-8 BOMs are handled.
+
+`match-inf` checks an exact supplied ID against model sections declared in
+`[Manufacturer]`, for x64 Windows version 10.0 and the supplied build. It handles
+`NTamd64`, basic major/minor decorations, optional minimum build with empty
+product/suite fields, and substitutions from the undecorated `[Strings]` section.
+It lists model candidates and related install-section names. It does not choose
+the best model section, evaluate installation directives, resolve files, verify
+signatures, or reproduce Windows ranking. Unsupported decorations, missing
+tokens, undecorated manufacturers, and localized string sections produce warnings;
+absence of a candidate is not proof of incompatibility when warnings are present.
+Matching a test ID is not evidence that the target computer has that hardware.
 
 There is no driver staging or injection command. Completing that work requires
 safe WIM file modifications, registry-hive servicing, driver-store behavior,
