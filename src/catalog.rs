@@ -238,6 +238,30 @@ pub fn subject_identifiers(reader: impl Read) -> io::Result<(String, Vec<Vec<u8>
     Ok((subject_algorithm, identifiers))
 }
 
+/// Compare an experimental PE SHA-256 digest with identifiers in a V2 catalog.
+/// A match is unauthenticated and does not establish Windows membership or trust.
+pub fn compare_pe(catalog: impl Read, image: impl Read) -> io::Result<PeComparison> {
+    let (algorithm, identifiers) = subject_identifiers(catalog)?;
+    if algorithm != "1.3.6.1.4.1.311.12.1.3" {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unsupported catalog subject algorithm",
+        ));
+    }
+    let digest = crate::pe::authenticode_sha256(image)?;
+    let matches = identifiers
+        .iter()
+        .filter(|id| id.as_slice() == digest)
+        .count();
+    Ok(PeComparison { digest, matches })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PeComparison {
+    pub digest: [u8; 32],
+    pub matches: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
