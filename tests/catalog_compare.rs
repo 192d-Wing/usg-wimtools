@@ -3,9 +3,12 @@ fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     let mut v = vec![tag];
     if content.len() < 128 {
         v.push(content.len() as u8);
-    } else {
-        assert!(content.len() < 256);
+    } else if content.len() < 256 {
         v.extend([0x81, content.len() as u8]);
+    } else {
+        assert!(content.len() < 65536);
+        v.push(0x82);
+        v.extend((content.len() as u16).to_be_bytes());
     }
     v.extend(content);
     v
@@ -116,4 +119,68 @@ fn checks_signer_content_digest_without_claiming_authenticity() {
     for n in 0..cat.len() {
         assert!(catalog::check_content_digest(&cat[..n]).is_err());
     }
+}
+
+#[test]
+fn verifies_embedded_signer_and_rejects_tampering() {
+    use rsa::{
+        RsaPrivateKey, RsaPublicKey,
+        pkcs1v15::SigningKey,
+        pkcs8::EncodePublicKey,
+        rand_core::OsRng,
+        signature::{SignatureEncoding, Signer},
+    };
+    use sha2::{Digest, Sha256};
+    let key = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let spki = RsaPublicKey::from(&key).to_public_key_der().unwrap();
+    let issuer = tlv(0x30, &[]);
+    let serial = tlv(2, &[5]);
+    let mut tbs = serial.clone();
+    tbs.extend(tlv(0x30, &[]));
+    tbs.extend(&issuer);
+    tbs.extend(tlv(0x30, &[]));
+    tbs.extend(tlv(0x30, &[]));
+    tbs.extend(spki.as_bytes());
+    let cert = tlv(0x30, &tlv(0x30, &tbs));
+    let ctl_oid = [43, 6, 1, 4, 1, 130, 55, 10, 1];
+    let payload = [4, 2, 42, 43];
+    let mut content = tlv(6, &ctl_oid);
+    content.extend(tlv(0xa0, &tlv(0x30, &payload)));
+    let mut ct = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 9, 3]);
+    ct.extend(tlv(0x31, &tlv(6, &ctl_oid)));
+    let mut md = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 9, 4]);
+    md.extend(tlv(0x31, &tlv(4, &Sha256::digest(payload))));
+    let mut attrs = tlv(0x30, &ct);
+    attrs.extend(tlv(0x30, &md));
+    let sig = SigningKey::<Sha256>::new(key)
+        .sign(&tlv(0x31, &attrs))
+        .to_vec();
+    let mut issuer_serial = issuer;
+    issuer_serial.extend(serial);
+    let mut signer = tlv(2, &[1]);
+    signer.extend(tlv(0x30, &issuer_serial));
+    signer.extend(tlv(0x30, &tlv(6, &[96, 134, 72, 1, 101, 3, 4, 2, 1])));
+    signer.extend(tlv(0xa0, &attrs));
+    signer.extend(tlv(0x30, &tlv(6, &[42, 134, 72, 134, 247, 13, 1, 1, 1])));
+    signer.extend(tlv(4, &sig));
+    let mut signed = tlv(2, &[1]);
+    signed.extend(tlv(0x31, &[]));
+    signed.extend(tlv(0x30, &content));
+    signed.extend(tlv(0xa0, &cert));
+    signed.extend(tlv(0x31, &tlv(0x30, &signer)));
+    let mut outer = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 7, 2]);
+    outer.extend(tlv(0xa0, &tlv(0x30, &signed)));
+    let cat = tlv(0x30, &outer);
+    assert!(catalog::verify_embedded_signer(&cat[..]).is_ok());
+    let mut changed = cat.clone();
+    let pos = changed.windows(sig.len()).position(|v| v == sig).unwrap();
+    changed[pos] ^= 1;
+    assert!(catalog::verify_embedded_signer(&changed[..]).is_err());
+    let mut changed = cat.clone();
+    let pos = changed
+        .windows(payload.len())
+        .position(|v| v == payload)
+        .unwrap();
+    changed[pos + 3] ^= 1;
+    assert!(catalog::verify_embedded_signer(&changed[..]).is_err());
 }

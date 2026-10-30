@@ -328,6 +328,96 @@ pub fn check_content_digest(reader: impl Read) -> io::Result<bool> {
     Ok(actual.as_slice() == expected)
 }
 
+fn raw_element<'a>(input: &mut &'a [u8], tag: u8) -> io::Result<&'a [u8]> {
+    let before = *input;
+    element(input, tag)?;
+    Ok(&before[..before.len() - input.len()])
+}
+
+/// Verify a single SHA-256/RSA PKCS#1 v1.5 signer against its embedded
+/// certificate. This validates the mathematical signature and the CTL digest,
+/// but not the certificate's chain, identity, validity, revocation or policy.
+pub fn verify_embedded_signer(reader: impl Read) -> io::Result<()> {
+    use rsa::traits::PublicKeyParts;
+    use rsa::{
+        RsaPublicKey,
+        pkcs1v15::{Signature, VerifyingKey},
+        pkcs8::DecodePublicKey,
+        signature::Verifier,
+    };
+    let mut data = Vec::new();
+    reader.take(LIMIT + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > LIMIT {
+        return Err(bad("catalog exceeds 16 MiB limit"));
+    }
+    if !check_content_digest(&data[..])? {
+        return Err(bad("catalog content digest mismatch"));
+    }
+    let mut outer = only(&data, 0x30)?;
+    element(&mut outer, 6)?;
+    let mut signed = only(element(&mut outer, 0xa0)?, 0x30)?;
+    element(&mut signed, 2)?;
+    element(&mut signed, 0x31)?;
+    element(&mut signed, 0x30)?;
+    let mut certificates = element(&mut signed, 0xa0)?;
+    if signed.first() == Some(&0xa1) {
+        element(&mut signed, 0xa1)?;
+    }
+    let mut signer = only(element(&mut signed, 0x31)?, 0x30)?;
+    element(&mut signer, 2)?;
+    let mut issuer_serial = element(&mut signer, 0x30)?;
+    let issuer = raw_element(&mut issuer_serial, 0x30)?;
+    let serial = raw_element(&mut issuer_serial, 2)?;
+    if !issuer_serial.is_empty() {
+        return Err(bad("invalid signer identifier"));
+    }
+    element(&mut signer, 0x30)?;
+    let attrs = raw_element(&mut signer, 0xa0)?;
+    let mut attrs_der = attrs.to_vec();
+    attrs_der[0] = 0x31;
+    let mut algorithm = element(&mut signer, 0x30)?;
+    if oid(element(&mut algorithm, 6)?)? != "1.2.840.113549.1.1.1" {
+        return Err(bad("unsupported signature algorithm"));
+    }
+    if !algorithm.is_empty() && !element(&mut algorithm, 5)?.is_empty() {
+        return Err(bad("invalid signature algorithm parameters"));
+    }
+    if !algorithm.is_empty() {
+        return Err(bad("unexpected signature algorithm parameters"));
+    }
+    let signature =
+        Signature::try_from(element(&mut signer, 4)?).map_err(|_| bad("invalid RSA signature"))?;
+    let mut key_der = None;
+    while !certificates.is_empty() {
+        let mut cert = element(&mut certificates, 0x30)?;
+        let mut tbs = element(&mut cert, 0x30)?;
+        if tbs.first() == Some(&0xa0) {
+            element(&mut tbs, 0xa0)?;
+        }
+        let cert_serial = raw_element(&mut tbs, 2)?;
+        element(&mut tbs, 0x30)?;
+        let cert_issuer = raw_element(&mut tbs, 0x30)?;
+        element(&mut tbs, 0x30)?; // validity
+        element(&mut tbs, 0x30)?; // subject
+        let spki = raw_element(&mut tbs, 0x30)?;
+        if cert_serial == serial && cert_issuer == issuer && key_der.replace(spki).is_some() {
+            return Err(bad("ambiguous signer certificates"));
+        }
+    }
+    let key_bytes = key_der.ok_or_else(|| bad("signer certificate not found"))?;
+    if key_bytes.len() > 2048 {
+        return Err(bad("signer key encoding exceeds limit"));
+    }
+    let key = RsaPublicKey::from_public_key_der(key_bytes)
+        .map_err(|_| bad("unsupported signer public key"))?;
+    if !(2048..=4096).contains(&key.n().bits()) {
+        return Err(bad("unsupported signer RSA key size"));
+    }
+    VerifyingKey::<Sha256>::new(key)
+        .verify(&attrs_der, &signature)
+        .map_err(|_| bad("catalog signer signature mismatch"))
+}
+
 /// Compare an experimental PE SHA-256 digest with identifiers in a V2 catalog.
 /// A match is unauthenticated and does not establish Windows membership or trust.
 pub fn compare_pe(catalog: impl Read, image: impl Read) -> io::Result<PeComparison> {

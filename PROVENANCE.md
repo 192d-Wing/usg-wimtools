@@ -88,3 +88,5 @@ Catalog subject identifier inspection was informed by the published [CTL_INFO st
 PE digest support was independently implemented for a restricted contiguous-section layout using the [Microsoft PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format) and the supplied driver files. No Windows SIP or trust implementation is used, and this is not a formally separated clean-room process.
 
 The catalog content digest check follows [RFC 2315 sections 9.2–9.3](https://www.rfc-editor.org/rfc/rfc2315) and observed catalog structure; it does not verify signatures or establish trust.
+
+Embedded signer verification uses the pure Rust `rsa` crate and the SHA-256 implementation in `sha2`, with format processing informed by [RFC 2315](https://www.rfc-editor.org/rfc/rfc2315). Dependencies are recorded in Cargo.lock. The certificate is used only as a source of an issuer, serial and public key; its authenticity and validity are not checked.
