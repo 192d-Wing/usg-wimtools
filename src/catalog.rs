@@ -156,6 +156,88 @@ pub fn inspect(reader: impl Read) -> io::Result<CatalogEnvelope> {
     })
 }
 
+/// Extract subject identifiers from the supported catalog CTL layout. Attributes,
+/// file hashing rules, and signatures are deliberately not interpreted.
+pub fn subject_identifiers(reader: impl Read) -> io::Result<(String, Vec<Vec<u8>>)> {
+    let mut data = Vec::new();
+    reader.take(LIMIT + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > LIMIT {
+        return Err(bad("catalog exceeds 16 MiB limit"));
+    }
+    let envelope = inspect(&data[..])?;
+    if envelope.content_type != "1.3.6.1.4.1.311.10.1" {
+        return Err(bad("not Microsoft CTL content"));
+    }
+    let mut outer = only(&data, 0x30)?;
+    element(&mut outer, 6)?;
+    let mut signed = only(element(&mut outer, 0xa0)?, 0x30)?;
+    element(&mut signed, 2)?;
+    element(&mut signed, 0x31)?;
+    let mut content = element(&mut signed, 0x30)?;
+    element(&mut content, 6)?;
+    let mut ctl = only(element(&mut content, 0xa0)?, 0x30)?;
+    // Support the common v1 CTL layout, with optional list ID, sequence and next-update.
+    if ctl.first() == Some(&2) && element(&mut ctl, 2)? != [0] {
+        return Err(bad("unsupported CTL version"));
+    }
+    let mut usage = element(&mut ctl, 0x30)?;
+    let mut catalog_usage = false;
+    while !usage.is_empty() {
+        catalog_usage |= oid(element(&mut usage, 6)?)? == "1.3.6.1.4.1.311.12.1.1";
+    }
+    if !catalog_usage {
+        return Err(bad("CTL is not a catalog list"));
+    }
+    if ctl.first() == Some(&4) {
+        element(&mut ctl, 4)?;
+    }
+    if ctl.first() == Some(&2) {
+        element(&mut ctl, 2)?;
+    }
+    let time = *ctl.first().ok_or_else(|| bad("missing CTL update time"))?;
+    if !matches!(time, 0x17 | 0x18) {
+        return Err(bad("invalid CTL update time"));
+    }
+    element(&mut ctl, time)?;
+    if matches!(ctl.first(), Some(0x17 | 0x18)) {
+        let time = ctl[0];
+        element(&mut ctl, time)?;
+    }
+    let mut algorithm = element(&mut ctl, 0x30)?;
+    let subject_algorithm = oid(element(&mut algorithm, 6)?)?;
+    if !algorithm.is_empty() {
+        let tag = algorithm[0];
+        element(&mut algorithm, tag)?;
+    }
+    if !algorithm.is_empty() {
+        return Err(bad("unexpected subject algorithm fields"));
+    }
+    let mut entries = element(&mut ctl, 0x30)?;
+    let mut identifiers = Vec::new();
+    while !entries.is_empty() {
+        let mut entry = element(&mut entries, 0x30)?;
+        let id = element(&mut entry, 4)?;
+        if id.is_empty() || id.len() > 128 {
+            return Err(bad("unsupported subject identifier length"));
+        }
+        element(&mut entry, 0x31)?;
+        if !entry.is_empty() {
+            return Err(bad("unexpected CTL entry fields"));
+        }
+        identifiers.push(id.to_vec());
+        if identifiers.len() > 100_000 {
+            return Err(bad("too many CTL entries"));
+        }
+    }
+    if ctl.first() == Some(&0xa0) {
+        element(&mut ctl, 0xa0)?;
+    }
+    if !ctl.is_empty() {
+        return Err(bad("unexpected CTL fields"));
+    }
+    Ok((subject_algorithm, identifiers))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +256,39 @@ mod tests {
         let mut outer = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 7, 2]);
         outer.extend(tlv(0xa0, &tlv(0x30, &signed)));
         tlv(0x30, &outer)
+    }
+    fn catalog_fixture() -> Vec<u8> {
+        let usage = tlv(0x30, &tlv(6, &[43, 6, 1, 4, 1, 130, 55, 12, 1, 1]));
+        let mut ctl = usage;
+        ctl.extend(tlv(0x17, b"260101000000Z"));
+        ctl.extend(tlv(0x30, &tlv(6, &[42, 3])));
+        let mut entry = tlv(4, &[1, 2, 3]);
+        entry.extend(tlv(0x31, &[]));
+        ctl.extend(tlv(0x30, &tlv(0x30, &entry)));
+        let mut content = tlv(6, &[43, 6, 1, 4, 1, 130, 55, 10, 1]);
+        content.extend(tlv(0xa0, &tlv(0x30, &ctl)));
+        let mut signed = tlv(2, &[1]);
+        signed.extend(tlv(0x31, &[]));
+        signed.extend(tlv(0x30, &content));
+        signed.extend(tlv(0x31, &[]));
+        let mut outer = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 7, 2]);
+        outer.extend(tlv(0xa0, &tlv(0x30, &signed)));
+        tlv(0x30, &outer)
+    }
+    #[test]
+    fn reads_catalog_subjects_and_rejects_wrong_content() {
+        let f = catalog_fixture();
+        let (algorithm, entries) = subject_identifiers(&f[..]).unwrap();
+        assert_eq!(algorithm, "1.2.3");
+        assert_eq!(entries, [vec![1, 2, 3]]);
+        assert!(subject_identifiers(&fixture()[..]).is_err());
+        for n in 0..f.len() {
+            assert!(subject_identifiers(&f[..n]).is_err());
+        }
+        let mut changed = f.clone();
+        let index = changed.windows(3).position(|w| w == [1, 2, 3]).unwrap();
+        changed[index - 1] = 0;
+        assert!(subject_identifiers(&changed[..]).is_err());
     }
     #[test]
     fn reads_envelope() {

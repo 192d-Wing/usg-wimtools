@@ -206,3 +206,5 @@ See [PROVENANCE.md](PROVENANCE.md) for implementation source boundaries.
 ### Catalog envelope inspection
 
 `rust-image-tool inspect-catalog <file.cat>` reports the PKCS#7 envelope content type, digest algorithm identifiers, and counts of outer certificate and signer records. It supports version 1 SignedData and limits input to 16 MiB. Nested records and catalog content are opaque: this does not validate signatures, certificates, trust, catalog membership, or driver suitability. Record counts do not imply valid signatures.
+
+`rust-image-tool list-catalog-ids <file.cat>` lists subject identifiers from a limited Microsoft catalog CTL layout. The subject algorithm OID and identifiers are reported as encoded; attributes and file-specific hashing rules are not interpreted. A matching byte string alone does not establish verified file membership or catalog trust. Unsupported layouts are rejected.
