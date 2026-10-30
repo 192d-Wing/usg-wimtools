@@ -33,7 +33,7 @@ pub struct Manifest {
     pub warnings: Vec<String>,
     pub trust_status: String,
 }
-fn safe_parts(path: &str) -> io::Result<Vec<String>> {
+pub(crate) fn safe_parts(path: &str) -> io::Result<Vec<String>> {
     if path.is_empty() || path.contains('\\') || path.contains(':') {
         return Err(invalid("invalid manifest path"));
     }

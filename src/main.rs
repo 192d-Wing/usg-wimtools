@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -34,7 +34,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && !(args.len() == 5
             && (args[0] == "extract-file"
                 || args[0] == "replace-file"
-                || args[0] == "manifest-inf"))
+                || args[0] == "manifest-inf"
+                || args[0] == "audit-catalog-package"))
         && !(args.len() == 6 && args[0] == "hive-copy-set-dword")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
@@ -50,6 +51,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "extract-file"
             | "export-image"
             | "replace-file"
+            | "audit-catalog-package"
             | "verify-catalog-root-link"
             | "verify-catalog-issuer"
             | "verify-catalog-signature"
@@ -92,6 +94,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && command != "compare-catalog-pe"
         && command != "compare-catalog-inf-bytes"
         && command != "verify-catalog-root-link"
+        && command != "audit-catalog-package"
         && command != "hive-list"
         && command != "hive-get"
         && command != "hive-copy-set-dword"
@@ -102,6 +105,46 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "audit-catalog-package" {
+        if args.len() != 5 {
+            return Err(
+                "expected package directory, snapshot, catalog name and issuer certificate".into(),
+            );
+        }
+        let snapshot = rust_image_tool::manifest::load(std::path::Path::new(&args[2]))?;
+        let name = args[3].to_str().ok_or("invalid catalog name")?;
+        let report = rust_image_tool::package_check::check(
+            std::path::Path::new(&args[1]),
+            &snapshot,
+            name,
+            File::open(&args[4])?,
+        )?;
+        writeln!(out, "Catalog: {}", report.catalog_link)?;
+        for f in &report.files {
+            writeln!(
+                out,
+                "{} {}: {}",
+                if f.matched {
+                    "MATCH"
+                } else {
+                    "UNMATCHED/UNCHECKED"
+                },
+                f.path,
+                f.result
+            )?;
+        }
+        for warning in &report.warnings {
+            writeln!(out, "WARNING: {warning}")?;
+        }
+        writeln!(
+            out,
+            "Experimental comparisons only; supplied root is not trusted automatically, and Windows hashing, catalog membership, trust, package completeness and compatibility are NOT verified."
+        )?;
+        if !report.comparisons_match() {
+            return Err("one or more comparisons failed or were not performed".into());
+        }
+        return Ok(());
     }
     if command == "verify-catalog-root-link" {
         if args.len() != 3 {

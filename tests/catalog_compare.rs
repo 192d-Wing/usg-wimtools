@@ -265,3 +265,45 @@ fn compares_exact_inf_bytes_without_claiming_windows_membership() {
     let huge = vec![0u8; 16 * 1024 * 1024 + 1];
     assert!(catalog::compare_inf_bytes(&cat[..], &huge[..]).is_err());
 }
+
+#[test]
+fn package_audit_reports_unchecked_files_and_changed_snapshot() {
+    use rust_image_tool::{manifest, package_check};
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    let root = std::env::temp_dir().join(format!("catalog-package-test-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let inf = b"[Version]\nCatalogFile=driver.cat\n[Manufacturer]\n%v%=Models,NTamd64.10.0...19041\n[Models.NTamd64.10.0...19041]\n%d%=Install,PCI\\VEN_1234&DEV_5678\n[Install.NTamd64]\nCopyFiles=@driver.sys\n[SourceDisksNames]\n1=Disk,,,\n[SourceDisksFiles.amd64]\ndriver.sys=1\nnotes.txt=1\n[Strings]\nv=Vendor\nd=Device\n";
+    fs::write(root.join("driver.inf"), inf).unwrap();
+    fs::write(root.join("driver.sys"), image()).unwrap();
+    fs::write(root.join("notes.txt"), b"example").unwrap();
+    fs::write(root.join("driver.cat"), fixture(&Sha256::digest(inf), 3)).unwrap();
+    let snapshot =
+        manifest::create(&root.join("driver.inf"), "PCI\\VEN_1234&DEV_5678", 26300).unwrap();
+    let report =
+        package_check::check(&root, &snapshot, "driver.cat", &b"invalid root"[..]).unwrap();
+    assert!(!report.comparisons_match());
+    assert!(!report.catalog_link_matches);
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|f| f.path == "driver.inf" && f.matched)
+    );
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|f| f.path == "driver.sys" && !f.matched)
+    );
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|f| f.path == "notes.txt" && !f.matched && f.result.contains("not implemented"))
+    );
+    assert!(package_check::check(&root, &snapshot, "other.cat", &b"x"[..]).is_err());
+    fs::write(root.join("notes.txt"), b"changed").unwrap();
+    assert!(package_check::check(&root, &snapshot, "driver.cat", &b"x"[..]).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
