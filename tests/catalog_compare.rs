@@ -67,3 +67,53 @@ fn compares_digest_and_rejects_unsupported_inputs() {
     assert!(catalog::compare_pe(&cat[..], &b"not a PE"[..]).is_err());
     assert!(catalog::compare_pe(&cat[..cat.len() - 1], &original[..]).is_err());
 }
+
+fn signed_catalog(payload: &[u8], digest: &[u8], duplicate: bool, content_type: u8) -> Vec<u8> {
+    let ctl_oid = [43, 6, 1, 4, 1, 130, 55, 10, 1];
+    let mut content = tlv(6, &ctl_oid);
+    content.extend(tlv(0xa0, &tlv(0x30, payload)));
+    let mut attrs = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 9, 3]);
+    let mut type_oid = ctl_oid;
+    type_oid[8] = content_type;
+    attrs.extend(tlv(0x31, &tlv(6, &type_oid)));
+    let mut attrs = tlv(0x30, &attrs);
+    let mut md = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 9, 4]);
+    md.extend(tlv(0x31, &tlv(4, digest)));
+    let md = tlv(0x30, &md);
+    attrs.extend(&md);
+    if duplicate {
+        attrs.extend(&md);
+    }
+    let mut signer = tlv(2, &[1]);
+    signer.extend(tlv(0x30, &[]));
+    signer.extend(tlv(0x30, &tlv(6, &[96, 134, 72, 1, 101, 3, 4, 2, 1])));
+    signer.extend(tlv(0xa0, &attrs));
+    signer.extend(tlv(0x30, &[]));
+    signer.extend(tlv(4, &[1]));
+    let mut signed = tlv(2, &[1]);
+    signed.extend(tlv(0x31, &[]));
+    signed.extend(tlv(0x30, &content));
+    signed.extend(tlv(0x31, &tlv(0x30, &signer)));
+    let mut outer = tlv(6, &[42, 134, 72, 134, 247, 13, 1, 7, 2]);
+    outer.extend(tlv(0xa0, &tlv(0x30, &signed)));
+    tlv(0x30, &outer)
+}
+#[test]
+fn checks_signer_content_digest_without_claiming_authenticity() {
+    use sha2::{Digest, Sha256};
+    let payload = [4, 2, 42, 43];
+    let digest = Sha256::digest(payload);
+    let cat = signed_catalog(&payload, &digest, false, 1);
+    assert!(catalog::check_content_digest(&cat[..]).unwrap());
+    let changed = signed_catalog(&[4, 2, 42, 44], &digest, false, 1);
+    assert!(!catalog::check_content_digest(&changed[..]).unwrap());
+    assert!(
+        catalog::check_content_digest(&signed_catalog(&payload, &digest, true, 1)[..]).is_err()
+    );
+    assert!(
+        catalog::check_content_digest(&signed_catalog(&payload, &digest, false, 2)[..]).is_err()
+    );
+    for n in 0..cat.len() {
+        assert!(catalog::check_content_digest(&cat[..n]).is_err());
+    }
+}

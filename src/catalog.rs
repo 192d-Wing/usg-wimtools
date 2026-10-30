@@ -1,4 +1,5 @@
 //! Limited, read-only inspection of a PKCS#7 catalog envelope.
+use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 
 const LIMIT: u64 = 16 * 1024 * 1024;
@@ -236,6 +237,95 @@ pub fn subject_identifiers(reader: impl Read) -> io::Result<(String, Vec<Vec<u8>
         return Err(bad("unexpected CTL fields"));
     }
     Ok((subject_algorithm, identifiers))
+}
+
+/// Check a single signer's SHA-256 authenticated content digest. This does not
+/// verify the signature or certificate and therefore does not authenticate data.
+pub fn check_content_digest(reader: impl Read) -> io::Result<bool> {
+    let mut data = Vec::new();
+    reader.take(LIMIT + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > LIMIT {
+        return Err(bad("catalog exceeds 16 MiB limit"));
+    }
+    let envelope = inspect(&data[..])?;
+    if envelope.content_type != "1.3.6.1.4.1.311.10.1" || envelope.signer_records != 1 {
+        return Err(bad("expected a catalog with one signer"));
+    }
+    let mut outer = only(&data, 0x30)?;
+    element(&mut outer, 6)?;
+    let mut signed = only(element(&mut outer, 0xa0)?, 0x30)?;
+    element(&mut signed, 2)?;
+    element(&mut signed, 0x31)?;
+    let mut content = element(&mut signed, 0x30)?;
+    element(&mut content, 6)?;
+    let ctl = only(element(&mut content, 0xa0)?, 0x30)?;
+    if !content.is_empty() {
+        return Err(bad("unexpected catalog content"));
+    }
+    if signed.first() == Some(&0xa0) {
+        element(&mut signed, 0xa0)?;
+    }
+    if signed.first() == Some(&0xa1) {
+        element(&mut signed, 0xa1)?;
+    }
+    let mut signer = only(element(&mut signed, 0x31)?, 0x30)?;
+    if element(&mut signer, 2)? != [1] {
+        return Err(bad("unsupported signer version"));
+    }
+    element(&mut signer, 0x30)?; // issuer and serial: opaque until signature verification
+    let mut algorithm = element(&mut signer, 0x30)?;
+    if oid(element(&mut algorithm, 6)?)? != "2.16.840.1.101.3.4.2.1" {
+        return Err(bad("unsupported signer digest algorithm"));
+    }
+    if !algorithm.is_empty() && !element(&mut algorithm, 5)?.is_empty() {
+        return Err(bad("invalid digest parameters"));
+    }
+    if !algorithm.is_empty() {
+        return Err(bad("unexpected digest parameters"));
+    }
+    let mut attributes = element(&mut signer, 0xa0)?;
+    let mut found_digest: Option<&[u8]> = None;
+    let mut found_type = false;
+    while !attributes.is_empty() {
+        let mut attr = element(&mut attributes, 0x30)?;
+        let id = oid(element(&mut attr, 6)?)?;
+        let values = element(&mut attr, 0x31)?;
+        if !attr.is_empty() {
+            return Err(bad("unexpected attribute fields"));
+        }
+        match id.as_str() {
+            "1.2.840.113549.1.9.3" => {
+                if found_type || oid(only(values, 6)?)? != envelope.content_type {
+                    return Err(bad("duplicate or incorrect content type attribute"));
+                }
+                found_type = true;
+            }
+            "1.2.840.113549.1.9.4" => {
+                let value = only(values, 4)?;
+                if found_digest.is_some() || value.len() != 32 {
+                    return Err(bad("duplicate or invalid message digest attribute"));
+                }
+                found_digest = Some(value);
+            }
+            _ => {}
+        }
+    }
+    if !found_type {
+        return Err(bad("missing content type attribute"));
+    }
+    let expected = found_digest.ok_or_else(|| bad("missing message digest attribute"))?;
+    element(&mut signer, 0x30)?; // signature algorithm
+    if element(&mut signer, 4)?.is_empty() {
+        return Err(bad("empty signature"));
+    }
+    if signer.first() == Some(&0xa1) {
+        element(&mut signer, 0xa1)?;
+    }
+    if !signer.is_empty() {
+        return Err(bad("unexpected signer fields"));
+    }
+    let actual = Sha256::digest(ctl);
+    Ok(actual.as_slice() == expected)
 }
 
 /// Compare an experimental PE SHA-256 digest with identifiers in a V2 catalog.
