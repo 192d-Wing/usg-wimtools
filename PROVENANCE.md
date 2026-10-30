@@ -64,3 +64,9 @@ observed INF text. It does not implement Windows selection or staging. Relevant
 Microsoft references include:
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-store
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/catalog-files
+
+The read-only REGF parser was independently implemented using the public format
+description at https://github.com/libyal/libregf/blob/main/documentation/Windows%20NT%20Registry%20File%20%28REGF%29%20format.asciidoc
+and synthetic inputs. This is a format document, not code copied into the project.
+Python-registry 1.3.1 was used separately to compare selected values; it is not
+linked to or executed by the Rust tool. No formal clean-room separation is claimed.

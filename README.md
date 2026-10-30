@@ -20,6 +20,8 @@ cargo run -- extract-file /path/to/install.wim 6 Windows/System32/notepad.exe ./
 cargo run -- export-image /path/to/install.wim 6 ./windows11-pro.wim
 cargo run -- inspect-inf /path/to/iaStorVD.inf
 cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
+cargo run -- hive-list /path/to/SYSTEM Select
+cargo run -- hive-get /path/to/SYSTEM Select Current
 ```
 
 Quote paths containing spaces. These commands also work in PowerShell with
@@ -88,6 +90,17 @@ There is no driver staging or injection command. Completing that work requires
 safe WIM file modifications, registry-hive servicing, driver-store behavior,
 catalog trust handling, and Windows deployment testing. Do not use the scanner
 as an installation or compatibility decision on its own.
+
+`hive-list` and `hive-get` inspect a REGF hive read-only. Paths are relative to
+the hive root, using `/` or `\`; pass an empty value name for the default value.
+The reader validates the header checksum, sequence numbers, bin and allocated
+cell bounds, and supports standard key lists and ordinary value data. Dirty hives
+requiring log replay, symbolic-link keys, segmented or values over 16,344 bytes,
+and hive files over 128 MiB are unsupported. Non-ASCII name matching is exact;
+ASCII is case-insensitive. It loads the values for a whole key, so one unsupported
+large value prevents reading that key. It does not validate every cell's semantic
+content, recover logs, or edit hives. It has been checked against selected keys
+in one Windows 11 SYSTEM hive; it is not a complete registry implementation.
 
 ## Development
 

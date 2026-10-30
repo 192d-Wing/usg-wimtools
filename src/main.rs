@@ -3,11 +3,11 @@ use rust_image_tool::Wim;
 use std::{
     env,
     fs::File,
-    io::{self, Write},
+    io::{self, Read, Write},
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport is experimental. WIM editing and driver injection are not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport is experimental. WIM editing and driver injection are not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -17,8 +17,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if args.len() != 2
-        && !(args.len() == 3 && (args[0] == "verify-resource" || args[0] == "scan-drivers"))
-        && !(args.len() == 4 && (args[0] == "extract-resource" || args[0] == "export-image"))
+        && !(args.len() == 3
+            && (args[0] == "verify-resource"
+                || args[0] == "scan-drivers"
+                || args[0] == "hive-list"))
+        && !(args.len() == 4
+            && (args[0] == "extract-resource"
+                || args[0] == "export-image"
+                || args[0] == "hive-get"))
         && !(args.len() == 5 && args[0] == "extract-file")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
@@ -35,6 +41,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "export-image"
             | "inspect-inf"
             | "scan-drivers"
+            | "hive-list"
+            | "hive-get"
     ) {
         return Err(format!("unsupported command: {command}\n\n{HELP}").into());
     }
@@ -52,12 +60,71 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if command != "verify-resource"
         && command != "scan-drivers"
+        && command != "hive-list"
+        && command != "hive-get"
         && command != "extract-resource"
         && command != "extract-file"
         && command != "export-image"
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "hive-list" || command == "hive-get" {
+        if (command == "hive-list" && args.len() != 3) || (command == "hive-get" && args.len() != 4)
+        {
+            return Err("invalid hive command arguments".into());
+        }
+        let mut bytes = Vec::new();
+        File::open(&args[1])?
+            .take(128 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        let hive = rust_image_tool::registry::Hive::parse(bytes)?;
+        let path = args[2].to_str().ok_or("invalid registry path")?;
+        let key = hive.key(path)?;
+        if command == "hive-list" {
+            writeln!(
+                out,
+                "Key: {} (REGF {}.{})",
+                key.name, hive.major, hive.minor
+            )?;
+            for name in &key.subkeys {
+                writeln!(out, "  key: {name}")?;
+            }
+            for value in &key.values {
+                writeln!(
+                    out,
+                    "  value: {} type={} bytes={}",
+                    if value.name.is_empty() {
+                        "(default)"
+                    } else {
+                        &value.name
+                    },
+                    value.kind,
+                    value.data.len()
+                )?;
+            }
+        } else {
+            let name = args[3].to_str().ok_or("invalid value name")?;
+            let value = key
+                .values
+                .iter()
+                .find(|v| v.name.eq_ignore_ascii_case(name))
+                .ok_or("value not found")?;
+            writeln!(out, "Type: {}\nBytes: {}", value.kind, value.data.len())?;
+            if value.kind == 4 && value.data.len() == 4 {
+                writeln!(
+                    out,
+                    "DWORD: {}",
+                    u32::from_le_bytes(value.data[..4].try_into()?)
+                )?;
+            } else {
+                for b in &value.data {
+                    write!(out, "{b:02x}")?;
+                }
+                writeln!(out)?;
+            }
+        }
+        return Ok(());
     }
     if command == "inspect-inf" || command == "scan-drivers" {
         let (items, skipped) = if command == "inspect-inf" {

@@ -78,3 +78,14 @@ reported 255 INF files. A search for the illustrative hardware ID
 The local Dell hardware ID and firmware configuration were not available;
 this does not establish device applicability. The tool does not resolve all
 INF directives or validate signatures, and no drivers were staged or injected.
+
+## Read-only registry inspection
+
+The tool extracted the 10 MiB SYSTEM hive from exported Windows 11 Pro image 1,
+verifying its WIM resource hash. Its REGF parser read `Select/Current = 1` and
+`ControlSet001/Services/stornvme/Start = 0` and `disk/Start = 0`. A separately
+installed python-registry 1.3.1 reader agreed on these values. Synthetic tests
+exercise traversal, inline DWORD values, dirty sequence numbers, corrupted
+checksums and cells, and truncated files. Neither the source WIM nor extracted
+hive was modified. No registry write, driver staging, or boot validation has
+been performed.

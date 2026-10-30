@@ -567,3 +567,5 @@ mod export;
 pub use export::export_one;
 
 pub mod inf;
+
+pub mod registry;
