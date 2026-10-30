@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -47,6 +47,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "extract-file"
             | "export-image"
             | "replace-file"
+            | "pe-catalog-hash"
             | "list-catalog-ids"
             | "inspect-catalog"
             | "inspect-inf"
@@ -89,6 +90,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "pe-catalog-hash" {
+        let hash = rust_image_tool::pe::authenticode_sha256(File::open(&args[1])?)?;
+        write!(out, "PE SHA-256: ")?;
+        for byte in hash {
+            write!(out, "{byte:02x}")?;
+        }
+        writeln!(
+            out,
+            "\nExperimental digest only; catalog membership, signature and trust are NOT verified."
+        )?;
+        return Ok(());
     }
     if command == "list-catalog-ids" {
         let (algorithm, identifiers) =

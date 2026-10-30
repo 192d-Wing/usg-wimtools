@@ -576,3 +576,5 @@ pub mod registry;
 pub mod manifest;
 
 pub mod catalog;
+
+pub mod pe;
