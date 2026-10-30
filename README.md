@@ -2,8 +2,9 @@
 
 An independent, pure Rust foundation for portable Windows image tooling.
 Targets macOS, Linux, and Windows. Requires Rust 1.99, edition 2024.
-No external crates, native libraries, Windows servicing APIs, or subprocesses
-are used by the implementation. Unsafe Rust is forbidden.
+The XML parser uses the pure-Rust `roxmltree` and `memchr` crates. The tool
+does not use native libraries, Windows servicing APIs, or subprocesses. Unsafe
+Rust is forbidden in this project's code.
 
 ## Current milestone
 
@@ -16,6 +17,7 @@ cargo run -- xml /path/to/install.wim
 cargo run -- check-structure /path/to/install.wim
 cargo run -- verify-resource /path/to/install.wim 0
 cargo run -- extract-file /path/to/install.wim 6 Windows/System32/notepad.exe ./notepad.exe
+cargo run -- export-image /path/to/install.wim 6 ./windows11-pro.wim
 ```
 
 Quote paths containing spaces. These commands also work in PowerShell with
@@ -52,6 +54,22 @@ resources, split WIM, resource-only images,
 unknown flags/versions, and nonclassic compression layouts are unsupported
 for checking. Header inspection can still expose some unsupported variants.
 
+`export-image` produces a single-image WIM, numbered 1, using an existing
+classic, non-bootable, single-part WIM without an integrity table. It traverses
+image metadata to collect referenced resources, preserves their stored bytes
+and metadata, rebuilds lookup counts and XML, and verifies the metadata in the
+result. The source is copied and compared byte-for-byte before editing the copy.
+The output retains unused original resource bytes and is not size optimized.
+It requires space for the complete source WIM and a filesystem that supports
+hard links. The destination must not exist. A same-directory temporary file is
+published using a non-overwriting hard link; normal errors clean it up, while
+forced termination can leave a `.partial` file. The tool does not implement
+power-loss recovery or protect against concurrent source changes after comparison.
+
+The exporter is experimental. Its output passed an independent resource check
+for one Windows 11 Pro WIM, but Windows Setup, booting and driver servicing have
+not been tested. No authenticity check is performed.
+
 ## Development
 
 ```sh
@@ -74,7 +92,8 @@ Only macOS has been exercised locally; the CI matrix covers all three platforms.
 2. Implement streaming verification for resources larger than 128 MiB.
 3. Parse and preserve directory metadata, ACLs, hard links, alternate streams,
    reparse points, and image XML; validate lossless round trips.
-4. Implement transactional WIM export/write operations with crash recovery.
+4. Extend WIM editing, optimize exports, and add crash recovery and validation
+   against Windows deployment tools on Windows.
 5. Parse Dell INF packages and report dependencies and hardware matches.
 6. Implement offline driver-store and registry servicing. Simply copying driver
    files is insufficient. Boot-critical storage support needs separate validation.

@@ -7,3 +7,4 @@ description = "Independent, portable WIM inspection foundation"
 publish = false
 
 [dependencies]
+roxmltree = "0.21.1"

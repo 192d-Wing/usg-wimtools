@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nImage writing and driver injection are not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport is experimental. WIM editing and driver injection are not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -18,7 +18,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.len() != 2
         && !(args.len() == 3 && args[0] == "verify-resource")
-        && !(args.len() == 4 && args[0] == "extract-resource")
+        && !(args.len() == 4 && (args[0] == "extract-resource" || args[0] == "export-image"))
         && !(args.len() == 5 && args[0] == "extract-file")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
@@ -32,6 +32,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "verify-resource"
             | "extract-resource"
             | "extract-file"
+            | "export-image"
     ) {
         return Err(format!("unsupported command: {command}\n\n{HELP}").into());
     }
@@ -44,12 +45,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if command == "extract-file" && args.len() != 5 {
         return Err("extract-file requires an image index, image path, and output path".into());
     }
+    if command == "export-image" && args.len() != 4 {
+        return Err("export-image requires an index and output path".into());
+    }
     if command != "verify-resource"
         && command != "extract-resource"
         && command != "extract-file"
+        && command != "export-image"
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "export-image" {
+        let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
+        rust_image_tool::export_one(
+            std::path::Path::new(&args[1]),
+            std::path::Path::new(&args[3]),
+            index,
+        )?;
+        writeln!(
+            out,
+            "Experimental image export created; Windows deployment compatibility not yet verified."
+        )?;
+        return Ok(());
     }
     let mut wim = Wim::open(File::open(&args[1])?)?;
     match command {

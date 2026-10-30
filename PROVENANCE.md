@@ -27,7 +27,9 @@ or translated into this project. This exposure is recorded rather than claiming
 the implementer had no access to other implementations.
 
 No DISM, WIMGAPI, wimlib, or other WIM implementation is linked or executed by
-the tool. No external implementation source is included. If strict personnel
+the Rust tool. A separately downloaded wimlib binary was used only as an
+independent verifier for the exported WIM; it is not a project dependency.
+No external WIM implementation source is included. If strict personnel
 separation is required, establish an independent specification/implementation
 process before extending or adopting this prototype.
 
@@ -53,3 +55,6 @@ see [VALIDATION.md](VALIDATION.md). This revealed that plain XML and lookup
 resources can carry the metadata bit. The independently written flag check
 was corrected and a synthetic regression test was added. No Windows boot,
 driver package extraction, or driver-injection compatibility is claimed.
+
+XML parsing uses the pure-Rust crates `roxmltree` and `memchr` under their
+respective open-source licenses; dependency versions are locked in Cargo.lock.

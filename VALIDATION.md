@@ -48,3 +48,24 @@ checks and extraction do not validate every resource, all metadata, XML
 semantics, source authenticity, Windows Setup, bootability, or driver
 installation. The ISO filename and XML
 are observed metadata, not independent proof of source authenticity.
+
+
+## Single-image export
+
+The Rust exporter created a single-image export from the same source's index 6.
+It copied and compared the full original WIM, rebuilt the lookup and XML, then
+compared the decoded image metadata to the source. The result contains one
+Windows 11 Pro image at index 1 and 97,635 lookup records. It retains unused
+original resource bytes and is 8,160,869,314 bytes.
+
+An independently downloaded wimlib 1.14.5 binary (used only for validation,
+not linked or called by the Rust tool) recognized the image and successfully
+verified its metadata and all referenced file data. It reported no WIM integrity
+table, so that separate check was skipped. Its full directory listings of the
+source and exported image matched byte for byte (187,635 lines); its extracted
+`notepad.exe` also matched the source extraction.
+
+These checks do not establish source authenticity or prove Windows Setup will
+accept or boot the image. The export has no added Dell drivers. Automated tests
+include synthetic export, metadata-cycle rejection, missing-index handling,
+source preservation, and destination no-overwrite behavior.

@@ -562,3 +562,6 @@ pub fn find_image_path(metadata: &[u8], path: &str) -> io::Result<DirectoryEntry
     }
     Err(invalid("image path not found"))
 }
+
+mod export;
+pub use export::export_one;
