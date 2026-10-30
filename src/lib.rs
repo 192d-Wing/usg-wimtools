@@ -407,6 +407,8 @@ pub struct DirectoryEntry {
     pub attributes: u32,
     pub children_offset: u64,
     pub hash: [u8; 20],
+    /// Offset of the directory entry within its image metadata resource.
+    pub metadata_offset: usize,
 }
 impl<R: Read + Seek> Wim<R> {
     /// Metadata lookup entries follow image order for ordinary, single-part WIMs.
@@ -484,6 +486,7 @@ pub fn directory_entries(metadata: &[u8], offset: usize) -> io::Result<Vec<Direc
             attributes: u32_at(entry, 8),
             children_offset: u64_at(entry, 16),
             hash: entry[64..84].try_into().unwrap(),
+            metadata_offset: pos,
         });
         pos = end;
         for _ in 0..streams {
@@ -564,7 +567,7 @@ pub fn find_image_path(metadata: &[u8], path: &str) -> io::Result<DirectoryEntry
 }
 
 mod export;
-pub use export::export_one;
+pub use export::{export_one, replace_file};
 
 pub mod inf;
 

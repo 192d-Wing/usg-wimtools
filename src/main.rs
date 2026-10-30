@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport is experimental. WIM editing and driver injection are not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -25,7 +25,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             && (args[0] == "extract-resource"
                 || args[0] == "export-image"
                 || args[0] == "hive-get"))
-        && !(args.len() == 5 && args[0] == "extract-file")
+        && !(args.len() == 5 && (args[0] == "extract-file" || args[0] == "replace-file"))
         && !(args.len() == 6 && args[0] == "hive-copy-set-dword")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
@@ -40,6 +40,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "extract-resource"
             | "extract-file"
             | "export-image"
+            | "replace-file"
             | "inspect-inf"
             | "scan-drivers"
             | "hive-list"
@@ -68,9 +69,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && command != "extract-resource"
         && command != "extract-file"
         && command != "export-image"
+        && command != "replace-file"
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "replace-file" {
+        if args.len() != 5 {
+            return Err("expected WIM, image path, replacement file, and output WIM".into());
+        }
+        let path = args[2].to_str().ok_or("invalid image path")?;
+        rust_image_tool::replace_file(
+            std::path::Path::new(&args[1]),
+            path,
+            std::path::Path::new(&args[3]),
+            std::path::Path::new(&args[4]),
+        )?;
+        writeln!(
+            out,
+            "Experimental WIM created with a verified replacement; Windows deployment is not verified."
+        )?;
+        return Ok(());
     }
     if command == "hive-copy-set-dword" {
         if args.len() != 6 {

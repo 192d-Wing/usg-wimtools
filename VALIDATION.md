@@ -104,3 +104,19 @@ cells, failed publication, and refusing to overwrite an existing output. The
 implementation does not allocate registry cells, create keys, preserve a normal
 Windows last-write timestamp update, or stage drivers. Successful re-parsing is
 not proof that Windows will accept or boot a modified hive.
+
+## Experimental file replacement
+
+The Rust replacement command created a disposable copy of the single-image WIM,
+replacing its SYSTEM hive with the equal-sized test copy described above. The
+original WIM remained unchanged. An independent wimlib 1.14.5 extractor
+recovered bytes identical to the replacement hive. Its complete directory list
+matched the source listing (187,635 lines). The test changes a boot-related
+value only to exercise the format; the test WIM must not be deployed.
+The independent verifier successfully checked the final test WIM's metadata and
+all referenced file data; there was no WIM integrity table to check.
+
+Synthetic tests exercise replacement, source preservation, no-overwrite,
+wrong-sized inputs, missing paths, hard links, and shared-resource counts. The
+tool does not change timestamps, add new paths, stage drivers, or support WIMs
+with boot metadata or integrity tables. Windows loading has not been tested.

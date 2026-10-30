@@ -296,6 +296,212 @@ pub fn export_one(source: &Path, destination: &Path, index: u32) -> io::Result<(
     Ok(())
 }
 
+/// Replace a uniquely referenced regular file with equally sized bytes in a new
+/// single-image WIM. Stored payloads and original metadata are preserved except
+/// the selected file hash. This is experimental and does not stage drivers.
+pub fn replace_file(
+    source: &Path,
+    image_path: &str,
+    replacement: &Path,
+    destination: &Path,
+) -> io::Result<()> {
+    match fs::symlink_metadata(destination) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "destination already exists",
+            ));
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let mut input = Vec::new();
+    File::open(replacement)?
+        .take(128 * 1024 * 1024 + 1)
+        .read_to_end(&mut input)?;
+    if input.is_empty() || input.len() > 128 * 1024 * 1024 {
+        return Err(unsupported(
+            "replacement must be between 1 byte and 128 MiB",
+        ));
+    }
+    let mut wim = Wim::open(File::open(source)?)?;
+    wim.check_structure()?;
+    if wim.header.image_count != 1
+        || wim.header.boot_index != 0
+        || !wim.header.integrity.is_absent()
+    {
+        return Err(unsupported(
+            "replacement requires one non-bootable image without an integrity table",
+        ));
+    }
+    let mut metadata = wim.image_metadata(1)?;
+    let entry = crate::find_image_path(&metadata, image_path)?;
+    if entry.attributes & (0x10 | 0x400) != 0 || entry.hash == [0; 20] {
+        return Err(unsupported("target must be a nonempty regular file"));
+    }
+    let off = entry.metadata_offset;
+    if u64_at(&metadata, off + 84) != 0 || u16_at(&metadata, off + 96) != 0 {
+        return Err(unsupported(
+            "hard-linked files or files with alternate streams are unsupported",
+        ));
+    }
+    let refs = references(&metadata)?;
+    if refs.get(&entry.hash) != Some(&1) {
+        return Err(unsupported(
+            "target resource must be referenced exactly once",
+        ));
+    }
+    let old = wim.find_hash(&entry.hash)?;
+    if old.resource.flags & 2 != 0 || old.resource.original_size != input.len() as u64 {
+        return Err(unsupported(
+            "replacement must have exactly the same length as the original",
+        ));
+    }
+    wim.read_verified(&old)?;
+    let new_hash = sha1::digest(&input);
+    if new_hash == entry.hash {
+        return Err(invalid("replacement is identical to original"));
+    }
+    metadata[off + 64..off + 84].copy_from_slice(&new_hash);
+    let metadata_hash = sha1::digest(&metadata);
+    let table = wim.header.lookup;
+    let mut records = Vec::with_capacity(table.stored_size as usize);
+    let mut old_found = 0;
+    let mut meta_found = 0;
+    let data_offset = wim.file_size;
+    let metadata_offset = data_offset
+        .checked_add(input.len() as u64)
+        .ok_or_else(|| invalid("offset overflow"))?;
+    for i in 0..table.stored_size / 50 {
+        wim.reader.seek(SeekFrom::Start(table.offset + i * 50))?;
+        let mut row = [0u8; 50];
+        wim.reader.read_exact(&mut row)?;
+        let hash: Hash = row[30..50].try_into().unwrap();
+        if hash == new_hash || hash == metadata_hash {
+            return Err(unsupported("new resource hash already exists in lookup"));
+        }
+        if hash == entry.hash {
+            old_found += 1;
+            if row[7] & 3 != 0 || u32_at(&row, 26) != 1 {
+                return Err(invalid("target lookup reference is not unique"));
+            }
+            descriptor(&mut row, 0, input.len() as u64, data_offset)?;
+            row[7] = 0;
+            row[30..50].copy_from_slice(&new_hash);
+        } else if row[7] & 2 != 0 {
+            meta_found += 1;
+            descriptor(&mut row, 0, metadata.len() as u64, metadata_offset)?;
+            row[30..50].copy_from_slice(&metadata_hash);
+        }
+        records.extend_from_slice(&row);
+    }
+    if old_found != 1 || meta_found != 1 {
+        return Err(invalid(
+            "missing or duplicated target or metadata lookup entry",
+        ));
+    }
+    let table_offset = metadata_offset
+        .checked_add(metadata.len() as u64)
+        .ok_or_else(|| invalid("offset overflow"))?;
+    let xml_offset = table_offset
+        .checked_add(records.len() as u64)
+        .ok_or_else(|| invalid("offset overflow"))?;
+    let xml = wim.xml_text()?;
+    let doc = roxmltree::Document::parse(&xml).map_err(|_| invalid("invalid XML"))?;
+    let root = doc.root_element();
+    if root.tag_name().name() != "WIM"
+        || root.attributes().len() != 0
+        || root
+            .children()
+            .filter(|n| n.is_element())
+            .any(|n| !matches!(n.tag_name().name(), "TOTALBYTES" | "IMAGE"))
+    {
+        return Err(unsupported("unsupported XML metadata layout"));
+    }
+    let xml_bytes = selected_xml(&xml, 1, xml_offset)?;
+    wim.reader.seek(SeekFrom::Start(0))?;
+    let mut header = [0; HEADER_SIZE];
+    wim.reader.read_exact(&mut header)?;
+    descriptor(&mut header, 48, records.len() as u64, table_offset)?;
+    descriptor(&mut header, 72, xml_bytes.len() as u64, xml_offset)?;
+    let mut seed = Vec::new();
+    seed.extend_from_slice(&wim.header.guid);
+    seed.extend_from_slice(&new_hash);
+    seed.extend_from_slice(&std::process::id().to_le_bytes());
+    seed.extend_from_slice(
+        &SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes(),
+    );
+    let guid = sha1::digest(&seed);
+    header[24..40].copy_from_slice(&guid[..16]);
+    header[31] = (header[31] & 0x0f) | 0x50;
+    header[32] = (header[32] & 0x3f) | 0x80;
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut tempname = destination
+        .file_name()
+        .ok_or_else(|| invalid("missing output filename"))?
+        .to_os_string();
+    tempname.push(format!(
+        ".{}.{}.partial",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let guard = Temp(parent.join(tempname));
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&guard.0)?;
+    wim.reader.seek(SeekFrom::Start(0))?;
+    if io::copy(&mut wim.reader, &mut file)? != wim.file_size {
+        return Err(invalid("source length changed"));
+    }
+    wim.reader.seek(SeekFrom::Start(0))?;
+    file.seek(SeekFrom::Start(0))?;
+    let mut a = vec![0u8; 1024 * 1024];
+    let mut b = vec![0u8; 1024 * 1024];
+    let mut left = wim.file_size;
+    while left > 0 {
+        let n = (left as usize).min(a.len());
+        wim.reader.read_exact(&mut a[..n])?;
+        file.read_exact(&mut b[..n])?;
+        if a[..n] != b[..n] {
+            return Err(invalid("copied source differs"));
+        }
+        left -= n as u64;
+    }
+    file.seek(SeekFrom::Start(data_offset))?;
+    file.write_all(&input)?;
+    file.write_all(&metadata)?;
+    file.write_all(&records)?;
+    file.write_all(&xml_bytes)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&header)?;
+    file.sync_all()?;
+    let mut output = Wim::open(file.try_clone()?)?;
+    output.check_structure()?;
+    let verify_meta = output.image_metadata(1)?;
+    if verify_meta != metadata {
+        return Err(invalid("modified metadata mismatch"));
+    }
+    let check = crate::find_image_path(&verify_meta, image_path)?;
+    let resource = output.find_hash(&check.hash)?;
+    if output.read_verified(&resource)? != input {
+        return Err(invalid("replacement verification failed"));
+    }
+    fs::hard_link(&guard.0, destination)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +607,60 @@ mod tests {
         data[24..32].copy_from_slice(&8u64.to_le_bytes());
         assert!(references(&data).is_err());
         assert!(references(&data[..50]).is_err());
+    }
+    #[test]
+    fn replace_regular_file_and_refuse_invalid_inputs() {
+        let dir = std::env::temp_dir().join(format!("wim-replace-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.wim");
+        let dest = dir.join("out.wim");
+        let rep = dir.join("new.bin");
+        let original = test_wim();
+        fs::write(&source, &original).unwrap();
+        fs::write(&rep, b"xyz").unwrap();
+        replace_file(&source, "abc", &rep, &dest).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), original);
+        let mut out = Wim::open(File::open(&dest).unwrap()).unwrap();
+        out.check_structure().unwrap();
+        let meta = out.image_metadata(1).unwrap();
+        let entry = crate::find_image_path(&meta, "abc").unwrap();
+        let row = out.find_hash(&entry.hash).unwrap();
+        assert_eq!(out.read_verified(&row).unwrap(), b"xyz");
+        let bytes = fs::read(&dest).unwrap();
+        assert!(replace_file(&source, "abc", &rep, &dest).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), bytes);
+        let no = dir.join("none.wim");
+        fs::write(&rep, b"different length").unwrap();
+        assert!(replace_file(&source, "abc", &rep, &no).is_err());
+        assert!(!no.exists());
+        fs::write(&rep, b"abc").unwrap();
+        assert!(replace_file(&source, "abc", &rep, &no).is_err());
+        assert!(!no.exists());
+        assert!(replace_file(&source, "missing", &rep, &no).is_err());
+        assert!(!no.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn replace_rejects_hardlinks_and_shared_hashes() {
+        let dir = std::env::temp_dir().join(format!("wim-replace-unsafe-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.wim");
+        let dest = dir.join("dest.wim");
+        let rep = dir.join("new.bin");
+        fs::write(&rep, b"xyz").unwrap();
+        let mut b = test_wim();
+        b[208 + 120 + 84..208 + 120 + 92].copy_from_slice(&1u64.to_le_bytes());
+        let hash = sha1::digest(&b[208..448]);
+        b[451 + 30..451 + 50].copy_from_slice(&hash);
+        fs::write(&source, b).unwrap();
+        assert!(replace_file(&source, "abc", &rep, &dest).is_err());
+        assert!(!dest.exists());
+        let mut b = test_wim();
+        b[451 + 50 + 26..451 + 50 + 30].copy_from_slice(&2u32.to_le_bytes());
+        fs::write(&source, b).unwrap();
+        assert!(replace_file(&source, "abc", &rep, &dest).is_err());
+        assert!(!dest.exists());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

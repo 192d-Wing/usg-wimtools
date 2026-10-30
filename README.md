@@ -18,6 +18,7 @@ cargo run -- check-structure /path/to/install.wim
 cargo run -- verify-resource /path/to/install.wim 0
 cargo run -- extract-file /path/to/install.wim 6 Windows/System32/notepad.exe ./notepad.exe
 cargo run -- export-image /path/to/install.wim 6 ./windows11-pro.wim
+cargo run -- replace-file /path/to/single-image.wim Windows/example.bin ./replacement.bin ./new.wim
 cargo run -- inspect-inf /path/to/iaStorVD.inf
 cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
 cargo run -- hive-list /path/to/SYSTEM Select
@@ -74,6 +75,21 @@ power-loss recovery or protect against concurrent source changes after compariso
 The exporter is experimental. Its output passed an independent resource check
 for one Windows 11 Pro WIM, but Windows Setup, booting and driver servicing have
 not been tested. No authenticity check is performed.
+
+`replace-file` experimentally replaces one existing, uniquely referenced regular
+file in a single-image, non-bootable WIM without an integrity table. The input
+file and replacement must have equal nonzero size (at most 128 MiB); files with
+hard links, alternate streams, or shared content are rejected. The operation
+verifies the original resource, copies and compares the source WIM, appends the
+replacement and updated metadata, and checks the output before publishing it to a
+new path. All other metadata is retained, including the original timestamps;
+new resource bytes are uncompressed. Existing orphan data remains in the output.
+The new destination is never overwritten, hard-link support is required, and a
+forced termination can leave a `.partial` file. Neither power-loss recovery nor
+concurrent source changes after the comparison are covered. A disposable Windows
+image passed independent resource verification, but Windows deployment and boot
+have not been tested. This operation does not add files, inject drivers, or stage
+packages and is not yet suitable for deployment.
 
 `inspect-inf` lists basic INF version fields, declared catalogs, raw Include
 and Needs directives, and candidate hardware IDs. `scan-drivers` recursively
