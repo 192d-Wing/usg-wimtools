@@ -268,6 +268,11 @@ fn parse_sections(text: &str) -> io::Result<Sections> {
                 .entry(name.clone())
                 .or_default()
                 .push((k.trim().to_owned(), v.trim().to_owned()));
+        } else if !line.is_empty() && !name.is_empty() {
+            sections
+                .entry(name.clone())
+                .or_default()
+                .push((line.to_owned(), String::new()));
         }
         pending.clear();
     }
@@ -473,6 +478,292 @@ pub fn model_candidates(path: &Path, id: &str, build: u32) -> io::Result<ModelRe
     Ok(ModelReport { matches, warnings })
 }
 
+/// An observed package file. Presence is not a signature or integrity check.
+#[derive(Debug)]
+pub struct PackageFile {
+    pub name: String,
+    pub path: Option<PathBuf>,
+    pub issue: Option<String>,
+}
+#[derive(Debug)]
+pub struct PackageAudit {
+    pub model: ModelMatch,
+    pub files: Vec<PackageFile>,
+    pub includes: Vec<String>,
+    pub needs: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+// Source media paths are interpreted relative to the INF directory. Do not
+// follow links, accept parent traversal, drive paths, or ambiguous case matches.
+fn find_relative(root: &Path, parts: &[String]) -> io::Result<Option<PathBuf>> {
+    let mut at = root.to_owned();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() || part == "." || part == ".." || part.contains(['/', '\\', ':']) {
+            return Err(invalid("unsafe INF source path"));
+        }
+        let mut hit = None;
+        for item in fs::read_dir(&at)? {
+            let item = item?;
+            let n = item.file_name();
+            if n.to_str().is_some_and(|s| s.eq_ignore_ascii_case(part)) {
+                if hit.is_some() {
+                    return Err(invalid("ambiguous case-insensitive package path"));
+                }
+                if item.file_type()?.is_symlink() {
+                    return Err(unsupported("package source path includes a symlink"));
+                }
+                hit = Some(item.path());
+            }
+        }
+        let Some(next) = hit else { return Ok(None) };
+        let ty = fs::metadata(&next)?;
+        if i + 1 == parts.len() {
+            if !ty.is_file() {
+                return Err(invalid("package source is not a file"));
+            }
+        } else if !ty.is_dir() {
+            return Err(invalid("package path component is not a directory"));
+        }
+        at = next;
+    }
+    Ok(Some(at))
+}
+fn path_parts(s: &str) -> io::Result<Vec<String>> {
+    let mut parts = Vec::new();
+    for p in s.split(['\\', '/']) {
+        if p.is_empty() {
+            continue;
+        }
+        if p == "." || p == ".." || p.contains(':') {
+            return Err(invalid("unsafe INF source directory"));
+        }
+        parts.push(p.to_owned());
+    }
+    Ok(parts)
+}
+/// Audit declared x64 source files and candidate CopyFiles directives for a
+/// single model candidate. Unsupported references are warnings, not success.
+pub fn audit_package(path: &Path, id: &str, build: u32) -> io::Result<PackageAudit> {
+    let report = model_candidates(path, id, build)?;
+    if report.matches.len() != 1 {
+        return Err(unsupported(format!(
+            "audit requires exactly one model candidate; found {}",
+            report.matches.len()
+        )));
+    }
+    if !report.warnings.is_empty() {
+        return Err(unsupported(format!(
+            "unresolved model syntax: {}",
+            report.warnings.join("; ")
+        )));
+    }
+    let model = report.matches.into_iter().next().unwrap();
+    let (text, legacy) = decode(&fs::read(path)?)?;
+    let sections = parse_sections(&text)?;
+    let mut warnings = Vec::new();
+    if legacy {
+        warnings.push("legacy text decoded lossily".into());
+    }
+    let mut strings = BTreeMap::new();
+    if let Some(rows) = sections.get("strings") {
+        for (k, v) in rows {
+            strings.insert(
+                k.to_ascii_lowercase(),
+                v.trim().trim_matches('"').to_owned(),
+            );
+        }
+    }
+    let root = path
+        .parent()
+        .ok_or_else(|| invalid("INF has no parent directory"))?;
+    let mut disks: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for sec in ["sourcedisksnames", "sourcedisksnames.amd64"] {
+        if let Some(rows) = sections.get(sec) {
+            for (id, val) in rows {
+                let fields = split_values(val);
+                let tag = fields.get(1).copied().unwrap_or("");
+                if !tag.is_empty() {
+                    warnings.push(format!("source disk {id} has tag or cabinet {tag}; cabinet fallback is not evaluated"));
+                }
+                let dir = fields.get(3).copied().unwrap_or("");
+                let dir = if dir.contains('%') {
+                    match expand(dir, &strings) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warnings.push(e.to_string());
+                            continue;
+                        }
+                    }
+                } else {
+                    dir.to_owned()
+                };
+                disks.insert(id.trim().to_ascii_lowercase(), path_parts(&dir)?);
+            }
+        }
+    }
+    let mut sources: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for sec in ["sourcedisksfiles", "sourcedisksfiles.amd64"] {
+        if let Some(rows) = sections.get(sec) {
+            for (filename, val) in rows {
+                if filename.contains(['%', '/', '\\', ':']) || filename == "." || filename == ".." {
+                    warnings.push(format!("unsupported source filename: {filename}"));
+                    continue;
+                }
+                let fields = split_values(val);
+                let Some(disk) = fields.first() else { continue };
+                let disk = disk.to_ascii_lowercase();
+                let Some(mut dir) = disks.get(&disk).cloned() else {
+                    warnings.push(format!("source disk not defined: {disk} for {filename}"));
+                    continue;
+                };
+                let sub = fields.get(1).copied().unwrap_or("");
+                let sub = if sub.contains('%') {
+                    match expand(sub, &strings) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warnings.push(e.to_string());
+                            continue;
+                        }
+                    }
+                } else {
+                    sub.to_owned()
+                };
+                dir.extend(path_parts(&sub)?);
+                dir.push(filename.to_owned());
+                sources.insert(filename.to_ascii_lowercase(), (filename.to_owned(), dir));
+            }
+        }
+    }
+    if sources.is_empty() {
+        warnings.push("no x64 or generic SourceDisksFiles entries found".into());
+    }
+    let mut includes = BTreeSet::new();
+    let mut needs = BTreeSet::new();
+    let mut copies = BTreeSet::new();
+    for section in &model.related_sections {
+        if let Some(rows) = sections.get(section) {
+            for (k, v) in rows {
+                if k.eq_ignore_ascii_case("include") {
+                    includes.extend(split_values(v).iter().map(|x| x.to_string()));
+                }
+                if k.eq_ignore_ascii_case("needs") {
+                    needs.extend(split_values(v).iter().map(|x| x.to_string()));
+                }
+                if k.eq_ignore_ascii_case("copyinf") {
+                    warnings.push(format!("CopyINF not resolved in {section}: {v}"));
+                }
+                if !k.eq_ignore_ascii_case("copyfiles") {
+                    continue;
+                }
+                for item in split_values(v) {
+                    let item = if item.contains('%') {
+                        match expand(item, &strings) {
+                            Ok(x) => x,
+                            Err(e) => {
+                                warnings.push(e.to_string());
+                                continue;
+                            }
+                        }
+                    } else {
+                        item.to_owned()
+                    };
+                    if let Some(file) = item.strip_prefix('@') {
+                        copies.insert(file.to_ascii_lowercase());
+                        continue;
+                    }
+                    let name = item.to_ascii_lowercase();
+                    if let Some(files) = sections.get(&name) {
+                        for (line, val) in files {
+                            let text = if val.is_empty() {
+                                line.clone()
+                            } else {
+                                format!("{line}={val}")
+                            };
+                            let fields = split_values(&text);
+                            let filename = fields
+                                .get(1)
+                                .filter(|s| !s.is_empty())
+                                .or_else(|| fields.first())
+                                .copied()
+                                .unwrap_or("");
+                            if filename.contains('%') {
+                                warnings.push(format!("unresolved CopyFiles entry: {filename}"));
+                            } else if !filename.is_empty() {
+                                copies.insert(filename.to_ascii_lowercase());
+                            }
+                        }
+                    } else {
+                        warnings.push(format!("missing or external CopyFiles section: {name}"));
+                    }
+                }
+            }
+        }
+    }
+    for c in &copies {
+        if !sources.contains_key(c) {
+            warnings.push(format!(
+                "CopyFiles source not declared in x64 SourceDisksFiles: {c}"
+            ));
+        }
+    }
+    let mut files = Vec::new();
+    for (_, (name, parts)) in sources {
+        let resolved = find_relative(root, &parts)?;
+        let issue = if resolved.is_none() {
+            Some("source file not found at declared path".into())
+        } else {
+            None
+        };
+        files.push(PackageFile {
+            name,
+            path: resolved,
+            issue,
+        });
+    }
+    // Catalogue selection and trust require Windows-specific rules; report every
+    // declared filename, not an asserted selected/trusted certificate.
+    let inv = inspect(path)?;
+    for cat in inv.catalogs {
+        if cat.contains('%') {
+            warnings.push(format!("catalog token unresolved: {cat}"));
+            continue;
+        }
+        let resolved = find_relative(root, std::slice::from_ref(&cat))?;
+        let issue = if resolved.is_none() {
+            Some("catalog not found beside INF".into())
+        } else {
+            None
+        };
+        files.push(PackageFile {
+            name: cat,
+            path: resolved,
+            issue,
+        });
+    }
+    if files
+        .iter()
+        .all(|f| !f.name.to_ascii_lowercase().ends_with(".cat"))
+    {
+        warnings.push("no catalog file declared".into());
+    }
+    if !includes.is_empty() || !needs.is_empty() {
+        warnings
+            .push("Include/Needs dependencies require additional Windows INF resolution".into());
+    }
+    warnings.push("all related install sections are inspected as candidates; target section selection is not implemented".into());
+    warnings.push("catalog signatures, CopyINF, external packages and complete dependency closure are not verified".into());
+    warnings.sort();
+    warnings.dedup();
+    Ok(PackageAudit {
+        model,
+        files,
+        includes: includes.into_iter().collect(),
+        needs: needs.into_iter().collect(),
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +854,55 @@ mod tests {
                 .matches
                 .is_empty()
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn audit_finds_declared_files_and_missing_copy_sources() {
+        let dir = std::env::temp_dir().join(format!("inf-audit-test-{}", std::process::id()));
+        fs::create_dir_all(dir.join("SubDir")).unwrap();
+        let p = dir.join("driver.inf");
+        let s = "[Version]\nCatalogFile=DRIVER.CAT\n[Manufacturer]\n%v%=Models,NTamd64.10.0...19041\n[Models.NTamd64.10.0...19041]\n%d%=Install,PCI\\VEN_1234&DEV_5678\n[Install.NTamd64]\nCopyFiles=@Direct.sys,CopySection\nInclude=machine.inf\nNeeds=NO_DRV\n[CopySection]\nrenamed.sys,actual.sys\nmissing.sys\n[SourceDisksNames]\n1=%disk%,,,SubDir\n[SourceDisksFiles.amd64]\nDirect.sys=1\nactual.sys=1\n[Strings]\nv=Vendor\nd=Device\ndisk=Disk\n";
+        fs::write(&p, s).unwrap();
+        for f in ["direct.sys", "ACTUAL.SYS"] {
+            fs::write(dir.join("SubDir").join(f), b"test").unwrap();
+        }
+        fs::write(dir.join("driver.cat"), b"test").unwrap();
+        let audit = audit_package(&p, "PCI\\VEN_1234&DEV_5678", 26300).unwrap();
+        assert_eq!(audit.files.len(), 3);
+        assert!(audit.files.iter().all(|f| f.path.is_some()));
+        assert_eq!(audit.includes, ["machine.inf"]);
+        assert_eq!(audit.needs, ["NO_DRV"]);
+        assert!(audit.warnings.iter().any(|w| w.contains("missing.sys")));
+        fs::remove_file(dir.join("SubDir").join("direct.sys")).unwrap();
+        let audit = audit_package(&p, "PCI\\VEN_1234&DEV_5678", 26300).unwrap();
+        assert!(
+            audit
+                .files
+                .iter()
+                .any(|f| f.name == "Direct.sys" && f.path.is_none())
+        );
+        assert!(audit_package(&p, "PCI\\VEN_0000&DEV_5678", 26300).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn audit_rejects_path_traversal() {
+        assert!(path_parts("../escape").is_err());
+        assert!(path_parts("C:\\Windows").is_err());
+        assert_eq!(path_parts("\\drivers\\x64").unwrap(), ["drivers", "x64"]);
+        let dir = std::env::temp_dir().join(format!("inf-audit-path-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        assert!(find_relative(&dir, &["..".into(), "escape.sys".into()]).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn audit_rejects_symlink_sources() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("inf-symlink-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("actual.sys"), b"data").unwrap();
+        symlink(dir.join("actual.sys"), dir.join("linked.sys")).unwrap();
+        assert!(find_relative(&dir, &["linked.sys".into()]).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 }

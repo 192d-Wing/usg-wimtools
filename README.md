@@ -22,6 +22,7 @@ cargo run -- replace-file /path/to/single-image.wim Windows/example.bin ./replac
 cargo run -- inspect-inf /path/to/iaStorVD.inf
 cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
 cargo run -- match-inf /path/to/iaStorVD.inf 'PCI\VEN_8086&DEV_7D0B' 26300
+cargo run -- audit-inf /path/to/iaStorVD.inf 'PCI\VEN_8086&DEV_7D0B' 26300
 cargo run -- hive-list /path/to/SYSTEM Select
 cargo run -- hive-get /path/to/SYSTEM Select Current
 cargo run -- hive-copy-set-dword /path/to/test.hive Example ValueName 42 ./test-copy.hive
@@ -114,6 +115,17 @@ signatures, or reproduce Windows ranking. Unsupported decorations, missing
 tokens, undecorated manufacturers, and localized string sections produce warnings;
 absence of a candidate is not proof of incompatibility when warnings are present.
 Matching a test ID is not evidence that the target computer has that hardware.
+
+`audit-inf` requires exactly one model candidate with no unresolved model
+warnings. It checks generic and x64 SourceDisksFiles declarations against
+SourceDisksNames paths, reports present or missing source files and catalogs,
+and inspects CopyFiles, Include, and Needs in related candidate install sections.
+It refuses path traversal, symbolic links, and ambiguous case-insensitive file
+names. All related install sections are inspected without choosing the one Windows
+would select. Cabinet fallback, CopyINF, external INF dependencies, catalog
+selection and signatures, and complete dependency closure remain unimplemented.
+Warnings and present files are not a certification that the package can be
+installed or staged. This is a read-only audit.
 
 There is no driver staging or injection command. Completing that work requires
 safe WIM file modifications, registry-hive servicing, driver-store behavior,

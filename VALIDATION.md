@@ -88,6 +88,14 @@ cover matching, architecture, minimum builds, substitutions, unsupported
 decorations, and ignoring undeclared model sections. These are candidate results,
 not Windows SetupAPI or target-device verification.
 
+The `audit-inf` prototype examined the same illustrative model and build in
+the Dell RST controller INF. It found the declared `iaStorVD.sys`,
+`RstMwService.exe`, `RstMwEventLogMsg.dll`, and `iaStorVD.cat` alongside the
+INF. The audit does not verify the catalog, reproduce Windows section selection,
+or establish complete package dependency closure. Synthetic tests cover
+case-insensitive resolution, missing files, undeclared CopyFiles entries,
+external dependencies, and unsafe source paths.
+
 ## Read-only registry inspection
 
 The tool extracted the 10 MiB SYSTEM hive from exported Windows 11 Pro image 1,

@@ -66,6 +66,9 @@ https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-store
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/catalog-files
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-manufacturer-section
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-strings-section
+https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-sourcedisksfiles-section
+https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-sourcedisksnames-section
+https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-copyfiles-directive
 
 The read-only REGF parser was independently implemented using the public format
 description at https://github.com/libyal/libregf/blob/main/documentation/Windows%20NT%20Registry%20File%20%28REGF%29%20format.asciidoc
