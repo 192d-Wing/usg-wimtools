@@ -580,3 +580,5 @@ pub mod catalog;
 pub mod pe;
 
 pub mod package_check;
+
+pub mod servicing;

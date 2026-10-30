@@ -92,3 +92,5 @@ The catalog content digest check follows [RFC 2315 sections 9.2–9.3](https://w
 Embedded signer verification uses the pure Rust `rsa` crate and the SHA-256 implementation in `sha2`, with format processing informed by [RFC 2315](https://www.rfc-editor.org/rfc/rfc2315). Dependencies are recorded in Cargo.lock. The certificate is used only as a source of an issuer, serial and public key; its authenticity and validity are not checked.
 
 The INF byte comparison is based on the observed Dell catalog and exact file bytes, not a claim to implement Windows INF SIP semantics. [Microsoft catalog documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/catalog-files) describes catalog hashes at a high level; no general INF hashing specification or independent Windows SIP result was established here.
+
+Offline servicing planning uses Microsoft’s [Driver Store documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-store), which states that packages are verified and validated before staging and that files must not be directly added outside staging. Image path inspection makes no staging or installation claim.

@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool inspect-servicing-image <image.wim> <image-index> <inf-name>\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -30,7 +30,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 || args[0] == "export-image"
                 || args[0] == "hive-get"
                 || args[0] == "match-inf"
-                || args[0] == "audit-inf"))
+                || args[0] == "audit-inf"
+                || args[0] == "inspect-servicing-image"))
         && !(args.len() == 5
             && (args[0] == "extract-file"
                 || args[0] == "replace-file"
@@ -43,7 +44,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let command = args[0].to_str().ok_or("invalid command encoding")?;
     if !matches!(
         command,
-        "info"
+        "inspect-servicing-image"
+            | "info"
             | "xml"
             | "check-structure"
             | "verify-resource"
@@ -87,6 +89,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if command != "verify-resource"
         && command != "scan-drivers"
+        && command != "inspect-servicing-image"
         && command != "match-inf"
         && command != "audit-inf"
         && command != "manifest-inf"
@@ -105,6 +108,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "inspect-servicing-image" {
+        if args.len() != 4 {
+            return Err("expected WIM path, image index and INF filename".into());
+        }
+        let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
+        let name = args[3].to_str().ok_or("invalid INF filename")?;
+        let mut wim = Wim::open(File::open(&args[1])?)?;
+        let report = rust_image_tool::servicing::inspect_image(&mut wim, index, name)?;
+        for item in report.observations {
+            writeln!(out, "{}: {}", item.path, item.detail)?;
+        }
+        writeln!(
+            out,
+            "FileRepository names with {name}_ prefix: {}",
+            report.matching_repository_directories.len()
+        )?;
+        for path in report.matching_repository_directories {
+            writeln!(out, "  {path}")?;
+        }
+        writeln!(
+            out,
+            "Read-only observations; package presence, WIM serviceability, Windows trust and driver staging are NOT verified."
+        )?;
+        return Ok(());
     }
     if command == "audit-catalog-package" {
         if args.len() != 5 {
