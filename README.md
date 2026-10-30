@@ -22,6 +22,7 @@ cargo run -- inspect-inf /path/to/iaStorVD.inf
 cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
 cargo run -- hive-list /path/to/SYSTEM Select
 cargo run -- hive-get /path/to/SYSTEM Select Current
+cargo run -- hive-copy-set-dword /path/to/test.hive Example ValueName 42 ./test-copy.hive
 ```
 
 Quote paths containing spaces. These commands also work in PowerShell with
@@ -99,8 +100,17 @@ requiring log replay, symbolic-link keys, segmented or values over 16,344 bytes,
 and hive files over 128 MiB are unsupported. Non-ASCII name matching is exact;
 ASCII is case-insensitive. It loads the values for a whole key, so one unsupported
 large value prevents reading that key. It does not validate every cell's semantic
-content, recover logs, or edit hives. It has been checked against selected keys
+content or recover logs. It has been checked against selected keys
 in one Windows 11 SYSTEM hive; it is not a complete registry implementation.
+
+`hive-copy-set-dword` experimentally changes one **existing inline** four-byte
+REG_DWORD and creates a separate new hive. It checks that the value cell has
+one reachable persistent reference, modifies only those four data bytes, reparses
+the result, and checks the new value. It does not create keys or values, handle
+external or non-DWORD values, update timestamps, or perform Windows staging.
+It requires a filesystem with hard-link support, never overwrites an existing
+destination, and may leave a `.partial` file after forced termination. Its output
+has not been loaded by Windows. Do not use experimental hive copies for deployment.
 
 ## Development
 

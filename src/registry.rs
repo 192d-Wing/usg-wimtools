@@ -256,8 +256,7 @@ impl Hive {
             .map(|i| self.value(u32_at(list, i * 4)))
             .collect()
     }
-    /// Path is relative to the hive root, separated by slash or backslash.
-    pub fn key(&self, path: &str) -> io::Result<Key> {
+    fn key_offset(&self, path: &str) -> io::Result<u32> {
         let mut current = self.root_offset;
         for part in path.split(['\\', '/']).filter(|x| !x.is_empty()) {
             if part == "." || part == ".." {
@@ -278,6 +277,12 @@ impl Hive {
         if u16_at(node, 2) & 0x10 != 0 {
             return Err(unsupported("registry links are not followed"));
         }
+        Ok(current)
+    }
+
+    /// Path is relative to the hive root, separated by slash or backslash.
+    pub fn key(&self, path: &str) -> io::Result<Key> {
+        let current = self.key_offset(path)?;
         let names = self
             .subkeys(current)?
             .iter()
@@ -289,6 +294,149 @@ impl Hive {
             values: self.values(current)?,
         })
     }
+    fn ensure_unique_value_reference(&self, target: u32) -> io::Result<()> {
+        let mut pending = vec![self.root_offset];
+        let mut seen = HashSet::new();
+        let mut references = 0usize;
+        while let Some(offset) = pending.pop() {
+            if !seen.insert(offset) {
+                return Err(invalid("duplicate or cyclic registry key"));
+            }
+            let node = self.key_node(offset)?;
+            // High-bit indexes refer to volatile, memory-only storage and cannot
+            // reference a persisted value cell in this on-disk hive.
+            if u32_at(node, 24) != 0 && u32_at(node, 32) & 0x8000_0000 == 0 {
+                return Err(unsupported(
+                    "unexpected persistent volatile-subkey reference",
+                ));
+            }
+            let count = u32_at(node, 36) as usize;
+            if count > 0 {
+                let list = self.cell(u32_at(node, 40))?;
+                if count.checked_mul(4).is_none_or(|n| n > list.len()) {
+                    return Err(invalid("truncated value list"));
+                }
+                for i in 0..count {
+                    if u32_at(list, i * 4) == target {
+                        references += 1;
+                    }
+                }
+            }
+            pending.extend(self.subkeys(offset)?);
+        }
+        if references != 1 {
+            return Err(invalid("value cell has multiple or missing references"));
+        }
+        Ok(())
+    }
+    /// Return a new hive with one existing inline REG_DWORD replaced. Does not
+    /// change keys, allocate cells, update timestamps, or edit the input hive.
+    pub fn replace_inline_dword(
+        &self,
+        path: &str,
+        value_name: &str,
+        new_value: u32,
+    ) -> io::Result<Vec<u8>> {
+        let key = self.key_offset(path)?;
+        let node = self.key_node(key)?;
+        let count = u32_at(node, 36) as usize;
+        if count == 0 {
+            return Err(invalid("registry value not found"));
+        }
+        let list = self.cell(u32_at(node, 40))?;
+        if count.checked_mul(4).is_none_or(|n| n > list.len()) {
+            return Err(invalid("truncated value list"));
+        }
+        let mut found = None;
+        for i in 0..count {
+            let off = u32_at(list, i * 4);
+            let value = self.value(off)?;
+            if value.name.eq_ignore_ascii_case(value_name) && found.replace(off).is_some() {
+                return Err(invalid("ambiguous registry value"));
+            }
+        }
+        let off = found.ok_or_else(|| invalid("registry value not found"))?;
+        self.ensure_unique_value_reference(off)?;
+        let v = self.cell(off)?;
+        if u32_at(v, 12) != 4 || u32_at(v, 4) != 0x8000_0004 {
+            return Err(unsupported(
+                "only existing inline 4-byte REG_DWORD values can be replaced",
+            ));
+        }
+        let (start, _) = self.cells[&off];
+        let position = start + 8;
+        let mut output = self.bytes.clone();
+        output[position..position + 4].copy_from_slice(&new_value.to_le_bytes());
+        // Re-parse and resolve before returning, so failure cannot produce output.
+        let checked = Hive::parse(output.clone())?;
+        let key = checked.key(path)?;
+        let value = key
+            .values
+            .iter()
+            .find(|v| v.name.eq_ignore_ascii_case(value_name))
+            .ok_or_else(|| invalid("rewritten value missing"))?;
+        if value.kind != 4 || value.data != new_value.to_le_bytes() {
+            return Err(invalid("rewritten value verification failed"));
+        }
+        Ok(output)
+    }
+}
+
+/// Publish new bytes through a same-directory temporary file and a non-overwriting
+/// hard link. This avoids exposing a partial destination during normal failures.
+pub fn save_new(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+    use std::{
+        fs::{self, OpenOptions},
+        io::Write,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    struct Temp(std::path::PathBuf);
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "destination already exists",
+            ));
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let mut name = path
+        .file_name()
+        .ok_or_else(|| invalid("missing output filename"))?
+        .to_os_string();
+    name.push(format!(
+        ".{}.{}.partial",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let guard = Temp(parent.join(name));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&guard.0)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    let check = fs::read(&guard.0)?;
+    if check != bytes {
+        return Err(invalid("saved hive differs from prepared bytes"));
+    }
+    Hive::parse(check)?;
+    fs::hard_link(&guard.0, path)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -390,5 +538,63 @@ mod tests {
         let mut free = original;
         put32(&mut free, 4128, 88);
         assert!(Hive::parse(free).is_err());
+    }
+    #[test]
+    fn replace_only_the_target_inline_value() {
+        let original = fixture();
+        let h = Hive::parse(original.clone()).unwrap();
+        let updated = h.replace_inline_dword("Select", "Current", 42).unwrap();
+        let differences: Vec<_> = original
+            .iter()
+            .zip(&updated)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .collect();
+        assert_eq!(differences.len(), 1);
+        assert_eq!(h.key("Select").unwrap().values[0].data, [1, 0, 0, 0]);
+        assert_eq!(
+            Hive::parse(updated).unwrap().key("Select").unwrap().values[0].data,
+            [42, 0, 0, 0]
+        );
+        assert!(h.replace_inline_dword("Select", "Missing", 42).is_err());
+        assert!(h.replace_inline_dword("Missing", "Current", 42).is_err());
+        let mut bad = fixture();
+        let off = bad.windows(2).position(|w| w == b"vk").unwrap();
+        put32(&mut bad, off + 12, 3);
+        let h = Hive::parse(bad).unwrap();
+        assert!(h.replace_inline_dword("Select", "Current", 42).is_err());
+    }
+    #[test]
+    fn publishes_copy_without_overwriting() {
+        let dir = std::env::temp_dir().join(format!("registry-save-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("saved.hive");
+        let bytes = fixture();
+        save_new(&dest, &bytes).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+        assert!(save_new(&dest, &bytes).is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn rejects_shared_value_cells_and_bad_publication() {
+        let mut bytes = fixture();
+        let hive = Hive::parse(bytes.clone()).unwrap();
+        let child = hive.key_offset("Select").unwrap();
+        let list = u32_at(hive.key_node(child).unwrap(), 40);
+        let root = hive.root_offset as usize + 4096 + 4;
+        put32(&mut bytes, root + 36, 1);
+        put32(&mut bytes, root + 40, list);
+        let hive = Hive::parse(bytes).unwrap();
+        assert!(hive.replace_inline_dword("Select", "Current", 2).is_err());
+        let dir =
+            std::env::temp_dir().join(format!("registry-invalid-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("bad.hive");
+        assert!(save_new(&dest, b"not a hive").is_err());
+        assert!(!dest.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

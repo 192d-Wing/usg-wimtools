@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport is experimental. WIM editing and driver injection are not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport is experimental. WIM editing and driver injection are not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -26,6 +26,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 || args[0] == "export-image"
                 || args[0] == "hive-get"))
         && !(args.len() == 5 && args[0] == "extract-file")
+        && !(args.len() == 6 && args[0] == "hive-copy-set-dword")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
     }
@@ -43,6 +44,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "scan-drivers"
             | "hive-list"
             | "hive-get"
+            | "hive-copy-set-dword"
     ) {
         return Err(format!("unsupported command: {command}\n\n{HELP}").into());
     }
@@ -62,12 +64,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && command != "scan-drivers"
         && command != "hive-list"
         && command != "hive-get"
+        && command != "hive-copy-set-dword"
         && command != "extract-resource"
         && command != "extract-file"
         && command != "export-image"
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "hive-copy-set-dword" {
+        if args.len() != 6 {
+            return Err(
+                "expected hive path, key, value name, decimal DWORD and new output path".into(),
+            );
+        }
+        let mut bytes = Vec::new();
+        File::open(&args[1])?
+            .take(128 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        let hive = rust_image_tool::registry::Hive::parse(bytes)?;
+        let key = args[2].to_str().ok_or("invalid registry path")?;
+        let name = args[3].to_str().ok_or("invalid registry value name")?;
+        let number: u32 = args[4].to_str().ok_or("invalid DWORD")?.parse()?;
+        let updated = hive.replace_inline_dword(key, name, number)?;
+        rust_image_tool::registry::save_new(std::path::Path::new(&args[5]), &updated)?;
+        writeln!(
+            out,
+            "Created experimental hive copy with one inline DWORD changed; Windows loading is not verified."
+        )?;
+        return Ok(());
     }
     if command == "hive-list" || command == "hive-get" {
         if (command == "hive-list" && args.len() != 3) || (command == "hive-get" && args.len() != 4)

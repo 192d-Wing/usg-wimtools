@@ -89,3 +89,18 @@ exercise traversal, inline DWORD values, dirty sequence numbers, corrupted
 checksums and cells, and truncated files. Neither the source WIM nor extracted
 hive was modified. No registry write, driver staging, or boot validation has
 been performed.
+
+## Experimental hive copy
+
+After the read-only inspection, the Rust tool created a separate test copy of
+the extracted SYSTEM hive and changed `Select/Current` from 1 to 2. This is a
+test value change, not a proposed system configuration. Python-registry 1.3.1
+independently read 1 from the source and 2 from the copy. The files had equal
+lengths and differed in one byte. The source hive and WIM remained unchanged;
+the copy was not loaded by Windows or inserted into the WIM.
+
+Tests cover inline DWORD replacement, wrong types, missing names, shared value
+cells, failed publication, and refusing to overwrite an existing output. The
+implementation does not allocate registry cells, create keys, preserve a normal
+Windows last-write timestamp update, or stage drivers. Successful re-parsing is
+not proof that Windows will accept or boot a modified hive.

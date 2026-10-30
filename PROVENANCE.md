@@ -70,3 +70,5 @@ description at https://github.com/libyal/libregf/blob/main/documentation/Windows
 and synthetic inputs. This is a format document, not code copied into the project.
 Python-registry 1.3.1 was used separately to compare selected values; it is not
 linked to or executed by the Rust tool. No formal clean-room separation is claimed.
+For volatile cell-index interpretation during write-safety checks, see the public
+format analysis at https://projectzero.google/2024/12/the-windows-registry-adventure-5-regf.html
