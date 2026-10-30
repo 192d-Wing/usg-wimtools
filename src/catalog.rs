@@ -573,6 +573,30 @@ fn verify_issuer_links(reader: impl Read, anchor: Option<&[u8]>) -> io::Result<(
     Ok(())
 }
 
+/// Compare the raw SHA-256 of an INF's bytes with catalog subject identifiers.
+/// This experimental comparison does not implement or prove Windows SIP hashing,
+/// INF validity, package membership, signature trust, or driver compatibility.
+pub fn compare_inf_bytes(catalog: impl Read, inf: impl Read) -> io::Result<PeComparison> {
+    let (algorithm, identifiers) = subject_identifiers(catalog)?;
+    if algorithm != "1.3.6.1.4.1.311.12.1.3" {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unsupported catalog subject algorithm",
+        ));
+    }
+    let mut input = Vec::new();
+    inf.take(LIMIT + 1).read_to_end(&mut input)?;
+    if input.len() as u64 > LIMIT {
+        return Err(bad("INF exceeds 16 MiB limit"));
+    }
+    let digest: [u8; 32] = Sha256::digest(&input).into();
+    let matches = identifiers
+        .iter()
+        .filter(|id| id.as_slice() == digest)
+        .count();
+    Ok(PeComparison { digest, matches })
+}
+
 /// Compare an experimental PE SHA-256 digest with identifiers in a V2 catalog.
 /// A match is unauthenticated and does not establish Windows membership or trust.
 pub fn compare_pe(catalog: impl Read, image: impl Read) -> io::Result<PeComparison> {

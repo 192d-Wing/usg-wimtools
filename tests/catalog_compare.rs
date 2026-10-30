@@ -241,3 +241,27 @@ fn verifies_embedded_signer_and_rejects_tampering() {
     changed[pos + 3] ^= 1;
     assert!(catalog::verify_embedded_signer(&changed[..]).is_err());
 }
+
+#[test]
+fn compares_exact_inf_bytes_without_claiming_windows_membership() {
+    use sha2::{Digest, Sha256};
+    let inf = b"[Version]\r\nSignature=\"$Windows NT$\"\r\n";
+    let digest = Sha256::digest(inf);
+    let cat = fixture(&digest, 3);
+    assert_eq!(
+        catalog::compare_inf_bytes(&cat[..], &inf[..])
+            .unwrap()
+            .matches,
+        1
+    );
+    assert_eq!(
+        catalog::compare_inf_bytes(&cat[..], &inf[..inf.len() - 1])
+            .unwrap()
+            .matches,
+        0
+    );
+    assert!(catalog::compare_inf_bytes(&fixture(&digest, 4)[..], &inf[..]).is_err());
+    assert!(catalog::compare_inf_bytes(&cat[..cat.len() - 1], &inf[..]).is_err());
+    let huge = vec![0u8; 16 * 1024 * 1024 + 1];
+    assert!(catalog::compare_inf_bytes(&cat[..], &huge[..]).is_err());
+}
