@@ -80,3 +80,5 @@ Python-registry 1.3.1 was used separately to compare selected values; it is not
 linked to or executed by the Rust tool. No formal clean-room separation is claimed.
 For volatile cell-index interpretation during write-safety checks, see the public
 format analysis at https://projectzero.google/2024/12/the-windows-registry-adventure-5-regf.html
+
+Catalog envelope inspection uses the published PKCS#7 structure in [RFC 2315](https://www.rfc-editor.org/rfc/rfc2315) and the context described in [Microsoft catalog files documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/catalog-files). It does not implement catalog trust or membership validation.

@@ -145,3 +145,5 @@ Synthetic tests exercise replacement, source preservation, no-overwrite,
 wrong-sized inputs, missing paths, hard links, and shared-resource counts. The
 tool does not change timestamps, add new paths, stage drivers, or support WIMs
 with boot metadata or integrity tables. Windows loading has not been tested.
+
+Catalog envelope inspection was exercised on the supplied Dell RST `iaStorVD.cat` and compared with the outer ASN.1 structure shown by OpenSSL. The reader reported Microsoft content type 1.3.6.1.4.1.311.10.1, SHA-256 digest OID 2.16.840.1.101.3.4.2.1, two certificate records, and one signer record. This comparison does not verify signatures, certificates, membership, or trust. Synthetic tests cover truncation and malformed lengths and OIDs.

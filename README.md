@@ -202,3 +202,7 @@ Full CBS servicing, Windows updates, feature management, online repair,
 mount drivers, and complete DISM CLI compatibility are outside this milestone.
 
 See [PROVENANCE.md](PROVENANCE.md) for implementation source boundaries.
+
+### Catalog envelope inspection
+
+`rust-image-tool inspect-catalog <file.cat>` reports the PKCS#7 envelope content type, digest algorithm identifiers, and counts of outer certificate and signer records. It supports version 1 SignedData and limits input to 16 MiB. Nested records and catalog content are opaque: this does not validate signatures, certificates, trust, catalog membership, or driver suitability. Record counts do not imply valid signatures.

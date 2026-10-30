@@ -574,3 +574,5 @@ pub mod inf;
 pub mod registry;
 
 pub mod manifest;
+
+pub mod catalog;
