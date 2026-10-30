@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool inspect-servicing-image <image.wim> <image-index> <inf-name>\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool audit-package-image <image.wim> <index> <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool inspect-servicing-image <image.wim> <image-index> <inf-name>\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -38,13 +38,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 || args[0] == "manifest-inf"
                 || args[0] == "audit-catalog-package"))
         && !(args.len() == 6 && args[0] == "hive-copy-set-dword")
+        && !(args.len() == 7 && args[0] == "audit-package-image")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
     }
     let command = args[0].to_str().ok_or("invalid command encoding")?;
     if !matches!(
         command,
-        "inspect-servicing-image"
+        "audit-package-image"
+            | "inspect-servicing-image"
             | "info"
             | "xml"
             | "check-structure"
@@ -90,6 +92,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if command != "verify-resource"
         && command != "scan-drivers"
         && command != "inspect-servicing-image"
+        && command != "audit-package-image"
         && command != "match-inf"
         && command != "audit-inf"
         && command != "manifest-inf"
@@ -108,6 +111,67 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && args.len() != 2
     {
         return Err("unexpected argument".into());
+    }
+    if command == "audit-package-image" {
+        if args.len() != 7 {
+            return Err(
+                "expected WIM, index, package directory, snapshot, catalog and issuer certificate"
+                    .into(),
+            );
+        }
+        let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
+        let snapshot = rust_image_tool::manifest::load(std::path::Path::new(&args[4]))?;
+        let mut wim = Wim::open(File::open(&args[1])?)?;
+        wim.check_structure()?;
+        if index == 0 || index > wim.header.image_count {
+            return Err("image index out of range".into());
+        }
+        let target = rust_image_tool::servicing::parse_target(&wim.xml_text()?, index)?;
+        writeln!(
+            out,
+            "Image metadata: architecture {}, Windows {}.{}, build {}",
+            target.architecture, target.major, target.minor, target.build
+        )?;
+        writeln!(
+            out,
+            "Snapshot: x64 candidate, build {}, hardware ID {}",
+            snapshot.windows_build, snapshot.hardware_id
+        )?;
+        if !target.matches_snapshot(&snapshot) {
+            return Err("image architecture or build does not match package snapshot".into());
+        }
+        let name = args[5].to_str().ok_or("invalid catalog name")?;
+        let report = rust_image_tool::package_check::check(
+            std::path::Path::new(&args[3]),
+            &snapshot,
+            name,
+            File::open(&args[6])?,
+        )?;
+        writeln!(out, "Catalog: {}", report.catalog_link)?;
+        for f in &report.files {
+            writeln!(
+                out,
+                "{} {}: {}",
+                if f.matched {
+                    "MATCH"
+                } else {
+                    "UNMATCHED/UNCHECKED"
+                },
+                f.path,
+                f.result
+            )?;
+        }
+        for warning in &report.warnings {
+            writeln!(out, "WARNING: {warning}")?;
+        }
+        writeln!(
+            out,
+            "Read-only experimental checks; image XML and hardware ID are not authenticated, Windows package selection, trust, staging and compatibility are NOT verified."
+        )?;
+        if !report.comparisons_match() {
+            return Err("one or more comparisons failed or were not performed".into());
+        }
+        return Ok(());
     }
     if command == "inspect-servicing-image" {
         if args.len() != 4 {
