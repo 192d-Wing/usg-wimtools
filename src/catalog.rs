@@ -458,9 +458,10 @@ fn certificate_parts(raw: &[u8]) -> io::Result<CertificateParts<'_>> {
         signature: &bits[1..],
     })
 }
-/// Verify the catalog signer and the signature of its certificate using an
-/// embedded issuer certificate. No certificate or trust policy is evaluated.
-pub fn verify_embedded_issuer(reader: impl Read) -> io::Result<()> {
+fn verify_certificate_link(
+    child: &CertificateParts<'_>,
+    issuer: &CertificateParts<'_>,
+) -> io::Result<()> {
     use rsa::{
         RsaPublicKey,
         pkcs1v15::{Signature, VerifyingKey},
@@ -468,6 +469,52 @@ pub fn verify_embedded_issuer(reader: impl Read) -> io::Result<()> {
         signature::Verifier,
         traits::PublicKeyParts,
     };
+    if child.issuer != issuer.subject {
+        return Err(bad(
+            "certificate issuer name does not match supplied issuer subject",
+        ));
+    }
+    let mut algorithm = only(child.algorithm, 0x30)?;
+    if oid(element(&mut algorithm, 6)?)? != "1.2.840.113549.1.1.11" {
+        return Err(bad("unsupported certificate signature algorithm"));
+    }
+    if !algorithm.is_empty() && !element(&mut algorithm, 5)?.is_empty() {
+        return Err(bad("invalid certificate signature parameters"));
+    }
+    if !algorithm.is_empty() || issuer.spki.len() > 2048 {
+        return Err(bad("unsupported certificate signature or key"));
+    }
+    let key = RsaPublicKey::from_public_key_der(issuer.spki)
+        .map_err(|_| bad("unsupported issuer public key"))?;
+    if !(2048..=4096).contains(&key.n().bits()) {
+        return Err(bad("unsupported issuer RSA key size"));
+    }
+    let signature =
+        Signature::try_from(child.signature).map_err(|_| bad("invalid certificate signature"))?;
+    VerifyingKey::<Sha256>::new(key)
+        .verify(child.tbs, &signature)
+        .map_err(|_| bad("certificate signature mismatch"))
+}
+
+/// Verify the catalog signer and the signature of its certificate using an
+/// embedded issuer certificate. No certificate or trust policy is evaluated.
+pub fn verify_embedded_issuer(reader: impl Read) -> io::Result<()> {
+    verify_issuer_links(reader, None)
+}
+
+/// Check a second certificate signature against the explicitly supplied DER
+/// certificate. Its selection, validity, and suitability are not validated.
+pub fn verify_issuer_against_certificate(reader: impl Read, anchor: impl Read) -> io::Result<()> {
+    let mut anchor_bytes = Vec::new();
+    anchor
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut anchor_bytes)?;
+    if anchor_bytes.len() > 1024 * 1024 {
+        return Err(bad("issuer certificate exceeds 1 MiB limit"));
+    }
+    verify_issuer_links(reader, Some(&anchor_bytes))
+}
+fn verify_issuer_links(reader: impl Read, anchor: Option<&[u8]>) -> io::Result<()> {
     let mut data = Vec::new();
     reader.take(LIMIT + 1).read_to_end(&mut data)?;
     if data.len() as u64 > LIMIT {
@@ -518,26 +565,12 @@ pub fn verify_embedded_issuer(reader: impl Read) -> io::Result<()> {
     if issuers.next().is_some() {
         return Err(bad("ambiguous embedded issuer certificates"));
     }
-    let mut algorithm = only(leaf.algorithm, 0x30)?;
-    if oid(element(&mut algorithm, 6)?)? != "1.2.840.113549.1.1.11" {
-        return Err(bad("unsupported certificate signature algorithm"));
+    verify_certificate_link(leaf, parent)?;
+    if let Some(anchor) = anchor {
+        let anchor = certificate_parts(anchor)?;
+        verify_certificate_link(parent, &anchor)?;
     }
-    if !algorithm.is_empty() && !element(&mut algorithm, 5)?.is_empty() {
-        return Err(bad("invalid certificate signature parameters"));
-    }
-    if !algorithm.is_empty() || parent.spki.len() > 2048 {
-        return Err(bad("unsupported certificate signature or key"));
-    }
-    let key = RsaPublicKey::from_public_key_der(parent.spki)
-        .map_err(|_| bad("unsupported issuer public key"))?;
-    if !(2048..=4096).contains(&key.n().bits()) {
-        return Err(bad("unsupported issuer RSA key size"));
-    }
-    let signature =
-        Signature::try_from(leaf.signature).map_err(|_| bad("invalid certificate signature"))?;
-    VerifyingKey::<Sha256>::new(key)
-        .verify(leaf.tbs, &signature)
-        .map_err(|_| bad("signer certificate signature mismatch"))
+    Ok(())
 }
 
 /// Compare an experimental PE SHA-256 digest with identifiers in a V2 catalog.

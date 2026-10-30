@@ -157,10 +157,26 @@ fn verifies_embedded_signer_and_rejects_tampering() {
     parent_tbs.extend(tlv(0x30, &[]));
     parent_tbs.extend(&issuer);
     parent_tbs.extend(spki.as_bytes());
-    let mut parent = tlv(0x30, &parent_tbs);
+    let parent_tbs = tlv(0x30, &parent_tbs);
+    let parent_sig = SigningKey::<Sha256>::new(key.clone())
+        .sign(&parent_tbs)
+        .to_vec();
+    let mut parent_bits = vec![0];
+    parent_bits.extend(&parent_sig);
+    let mut parent = parent_tbs;
     parent.extend(&cert_alg);
-    parent.extend(tlv(3, &[0, 1]));
+    parent.extend(tlv(3, &parent_bits));
     let parent = tlv(0x30, &parent);
+    let mut root_tbs = tlv(2, &[10]);
+    root_tbs.extend(&cert_alg);
+    root_tbs.extend(tlv(0x30, &[]));
+    root_tbs.extend(tlv(0x30, &[]));
+    root_tbs.extend(tlv(0x30, &tlv(2, &[8])));
+    root_tbs.extend(spki.as_bytes());
+    let mut root = tlv(0x30, &root_tbs);
+    root.extend(&cert_alg);
+    root.extend(tlv(3, &[0, 1]));
+    let root = tlv(0x30, &root);
     let ctl_oid = [43, 6, 1, 4, 1, 130, 55, 10, 1];
     let payload = [4, 2, 42, 43];
     let mut content = tlv(6, &ctl_oid);
@@ -185,7 +201,7 @@ fn verifies_embedded_signer_and_rejects_tampering() {
     let mut signed = tlv(2, &[1]);
     signed.extend(tlv(0x31, &[]));
     signed.extend(tlv(0x30, &content));
-    let mut certificates = cert;
+    let mut certificates = cert.clone();
     certificates.extend(parent);
     signed.extend(tlv(0xa0, &certificates));
     signed.extend(tlv(0x31, &tlv(0x30, &signer)));
@@ -194,6 +210,17 @@ fn verifies_embedded_signer_and_rejects_tampering() {
     let cat = tlv(0x30, &outer);
     assert!(catalog::verify_embedded_signer(&cat[..]).is_ok());
     assert!(catalog::verify_embedded_issuer(&cat[..]).is_ok());
+    assert!(catalog::verify_issuer_against_certificate(&cat[..], &root[..]).is_ok());
+    assert!(catalog::verify_issuer_against_certificate(&cat[..], &cert[..]).is_err());
+    assert!(catalog::verify_issuer_against_certificate(&cat[..], &root[..root.len() - 1]).is_err());
+    let mut changed_parent = cat.clone();
+    let pos = changed_parent
+        .windows(parent_sig.len())
+        .position(|v| v == parent_sig)
+        .unwrap();
+    changed_parent[pos] ^= 1;
+    assert!(catalog::verify_embedded_issuer(&changed_parent[..]).is_ok());
+    assert!(catalog::verify_issuer_against_certificate(&changed_parent[..], &root[..]).is_err());
     let mut changed_cert = cat.clone();
     let pos = changed_cert
         .windows(cert_sig.len())
