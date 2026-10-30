@@ -1,5 +1,5 @@
-use rust_image_tool::{CLASSIC_VERSION, HEADER_SIZE, Header, Wim};
 use std::io::Cursor;
+use usg_wimtools::{CLASSIC_VERSION, HEADER_SIZE, Header, Wim};
 
 fn put32(bytes: &mut [u8], at: usize, value: u32) {
     bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
@@ -185,13 +185,13 @@ fn checks_classic_compressed_container_without_claiming_decompression() {
 #[test]
 fn file_cli_handles_unicode_and_spaces_without_mutation() {
     use std::{fs, process::Command};
-    let directory = std::env::temp_dir().join(format!("rust-image-tool-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("usg-wimtools-{}", std::process::id()));
     fs::create_dir_all(&directory).unwrap();
     let path = directory.join("test 🦀 image.wim");
     let bytes = fixture();
     fs::write(&path, &bytes).unwrap();
     for command in ["info", "xml", "check-structure"] {
-        let result = Command::new(env!("CARGO_BIN_EXE_rust-image-tool"))
+        let result = Command::new(env!("CARGO_BIN_EXE_usg-wimtools"))
             .arg(command)
             .arg(&path)
             .output()
@@ -203,7 +203,7 @@ fn file_cli_handles_unicode_and_spaces_without_mutation() {
         );
         assert_eq!(fs::read(&path).unwrap(), bytes);
     }
-    let result = Command::new(env!("CARGO_BIN_EXE_rust-image-tool"))
+    let result = Command::new(env!("CARGO_BIN_EXE_usg-wimtools"))
         .arg("add-driver")
         .arg(&path)
         .output()
@@ -244,10 +244,10 @@ fn parses_directory_entries_and_rejects_bad_offsets() {
     for (i, ch) in "abc".encode_utf16().enumerate() {
         data[222 + i * 2..224 + i * 2].copy_from_slice(&ch.to_le_bytes());
     }
-    let result = rust_image_tool::find_image_path(&data, "abc").unwrap();
+    let result = usg_wimtools::find_image_path(&data, "abc").unwrap();
     assert_eq!(result.name, "abc");
-    assert!(rust_image_tool::find_image_path(&data, "../abc").is_err());
-    assert!(rust_image_tool::directory_entries(&data, usize::MAX).is_err());
+    assert!(usg_wimtools::find_image_path(&data, "../abc").is_err());
+    assert!(usg_wimtools::directory_entries(&data, usize::MAX).is_err());
     data[220..222].copy_from_slice(&255u16.to_le_bytes());
-    assert!(rust_image_tool::find_image_path(&data, "abc").is_err());
+    assert!(usg_wimtools::find_image_path(&data, "abc").is_err());
 }

@@ -10,7 +10,8 @@ Rust 1.99, edition 2024, conventional commits, and signed commits.
 
 ## Current state
 
-- Repository: this directory (`outputs/rust-image-tool`); branch `main`.
+- Repository: this directory (the folder is still named `rust-image-tool`);
+  branch `main`.
 - Latest commit: `43fcb13 docs(servicing): define driver staging requirements`.
 - README, validation log, and provenance document explain the current feature
   boundaries and prior checks. The Rust tool supports WIM inspection,

@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
-use rust_image_tool::Wim;
 use std::{
     env,
     fs::File,
     io::{self, Read, Write},
     process::ExitCode,
 };
+use usg_wimtools::Wim;
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool audit-package-image <image.wim> <index> <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool inspect-servicing-image <image.wim> <image-index> <inf-name>\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  rust-image-tool verify-catalog-root-link <file.cat> <issuer.der>\n  rust-image-tool verify-catalog-issuer <file.cat>\n  rust-image-tool verify-catalog-signature <file.cat>\n  rust-image-tool check-catalog-content <file.cat>\n  rust-image-tool compare-catalog-inf-bytes <file.cat> <file.inf>\n  rust-image-tool compare-catalog-pe <file.cat> <file.exe-or-sys>\n  rust-image-tool pe-catalog-hash <file.exe-or-sys>\n  rust-image-tool list-catalog-ids <file.cat>\n  rust-image-tool inspect-catalog <file.cat>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
+const HELP: &str = "usg-wimtools 0.1.0 — read-only WIM inspection\n\nUsage:\n  usg-wimtools audit-package-image <image.wim> <index> <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  usg-wimtools inspect-servicing-image <image.wim> <image-index> <inf-name>\n  usg-wimtools info <image.wim>\n  usg-wimtools xml <image.wim>\n  usg-wimtools check-structure <image.wim>\n  usg-wimtools verify-resource <image.wim> <lookup-index>\n  usg-wimtools extract-resource <image.wim> <lookup-index> <output>\n  usg-wimtools extract-file <image.wim> <image-index> <image-path> <output>\n  usg-wimtools export-image <image.wim> <image-index> <output.wim>\n  usg-wimtools replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  usg-wimtools audit-catalog-package <package-dir> <manifest.json> <catalog-name> <issuer.der>\n  usg-wimtools verify-catalog-root-link <file.cat> <issuer.der>\n  usg-wimtools verify-catalog-issuer <file.cat>\n  usg-wimtools verify-catalog-signature <file.cat>\n  usg-wimtools check-catalog-content <file.cat>\n  usg-wimtools compare-catalog-inf-bytes <file.cat> <file.inf>\n  usg-wimtools compare-catalog-pe <file.cat> <file.exe-or-sys>\n  usg-wimtools pe-catalog-hash <file.exe-or-sys>\n  usg-wimtools list-catalog-ids <file.cat>\n  usg-wimtools inspect-catalog <file.cat>\n  usg-wimtools inspect-inf <file.inf>\n  usg-wimtools match-inf <file.inf> <hardware-id> <windows-build>\n  usg-wimtools audit-inf <file.inf> <hardware-id> <windows-build>\n  usg-wimtools manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  usg-wimtools verify-manifest <package-directory> <manifest.json>\n  usg-wimtools scan-drivers <directory> [hardware-id]\n  usg-wimtools hive-list <hive-file> <key-path>\n  usg-wimtools hive-get <hive-file> <key-path> <value-name>\n  usg-wimtools hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -120,7 +120,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
-        let snapshot = rust_image_tool::manifest::load(std::path::Path::new(&args[4]))?;
+        let snapshot = usg_wimtools::manifest::load(std::path::Path::new(&args[4]))?;
         let mut wim = Wim::open(File::open(&args[1])?)?;
         wim.check_structure()?;
         if wim.header.image_count != 1 {
@@ -129,7 +129,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if index == 0 || index > wim.header.image_count {
             return Err("image index out of range".into());
         }
-        let target = rust_image_tool::servicing::parse_target(&wim.xml_text()?, index)?;
+        let target = usg_wimtools::servicing::parse_target(&wim.xml_text()?, index)?;
         writeln!(
             out,
             "Image metadata: architecture {}, Windows {}.{}, build {}, edition {}, installation type {}, product type {}",
@@ -150,7 +150,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("image architecture or build does not match package snapshot".into());
         }
         let name = args[5].to_str().ok_or("invalid catalog name")?;
-        let report = rust_image_tool::package_check::check(
+        let report = usg_wimtools::package_check::check(
             std::path::Path::new(&args[3]),
             &snapshot,
             name,
@@ -189,7 +189,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
         let name = args[3].to_str().ok_or("invalid INF filename")?;
         let mut wim = Wim::open(File::open(&args[1])?)?;
-        let report = rust_image_tool::servicing::inspect_image(&mut wim, index, name)?;
+        let report = usg_wimtools::servicing::inspect_image(&mut wim, index, name)?;
         for item in report.observations {
             writeln!(out, "{}: {}", item.path, item.detail)?;
         }
@@ -213,9 +213,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "expected package directory, snapshot, catalog name and issuer certificate".into(),
             );
         }
-        let snapshot = rust_image_tool::manifest::load(std::path::Path::new(&args[2]))?;
+        let snapshot = usg_wimtools::manifest::load(std::path::Path::new(&args[2]))?;
         let name = args[3].to_str().ok_or("invalid catalog name")?;
-        let report = rust_image_tool::package_check::check(
+        let report = usg_wimtools::package_check::check(
             std::path::Path::new(&args[1]),
             &snapshot,
             name,
@@ -251,7 +251,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if args.len() != 3 {
             return Err("expected catalog and DER issuer certificate".into());
         }
-        rust_image_tool::catalog::verify_issuer_against_certificate(
+        usg_wimtools::catalog::verify_issuer_against_certificate(
             File::open(&args[1])?,
             File::open(&args[2])?,
         )?;
@@ -262,7 +262,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if command == "verify-catalog-issuer" {
-        rust_image_tool::catalog::verify_embedded_issuer(File::open(&args[1])?)?;
+        usg_wimtools::catalog::verify_embedded_issuer(File::open(&args[1])?)?;
         writeln!(
             out,
             "Catalog signer signature and its certificate signature match the embedded issuer key. Certificate chain trust, identity, time, revocation, policy, and catalog membership are NOT verified."
@@ -270,7 +270,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if command == "verify-catalog-signature" {
-        rust_image_tool::catalog::verify_embedded_signer(File::open(&args[1])?)?;
+        usg_wimtools::catalog::verify_embedded_signer(File::open(&args[1])?)?;
         writeln!(
             out,
             "Content digest and RSA signature match an embedded certificate. Certificate chain, identity, time, revocation, policy, catalog membership and trust are NOT verified."
@@ -278,7 +278,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if command == "check-catalog-content" {
-        let matches = rust_image_tool::catalog::check_content_digest(File::open(&args[1])?)?;
+        let matches = usg_wimtools::catalog::check_content_digest(File::open(&args[1])?)?;
         writeln!(
             out,
             "Content digest matches signer attribute: {matches}\nThe signer attribute is unauthenticated; signature, certificate and trust are NOT verified."
@@ -292,10 +292,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if args.len() != 3 {
             return Err("expected catalog and INF paths".into());
         }
-        let report = rust_image_tool::catalog::compare_inf_bytes(
-            File::open(&args[1])?,
-            File::open(&args[2])?,
-        )?;
+        let report =
+            usg_wimtools::catalog::compare_inf_bytes(File::open(&args[1])?, File::open(&args[2])?)?;
         write!(out, "Raw INF SHA-256: ")?;
         for byte in report.digest {
             write!(out, "{byte:02x}")?;
@@ -315,7 +313,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("expected catalog and PE file paths".into());
         }
         let report =
-            rust_image_tool::catalog::compare_pe(File::open(&args[1])?, File::open(&args[2])?)?;
+            usg_wimtools::catalog::compare_pe(File::open(&args[1])?, File::open(&args[2])?)?;
         write!(out, "Experimental PE SHA-256: ")?;
         for byte in report.digest {
             write!(out, "{byte:02x}")?;
@@ -331,7 +329,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if command == "pe-catalog-hash" {
-        let hash = rust_image_tool::pe::authenticode_sha256(File::open(&args[1])?)?;
+        let hash = usg_wimtools::pe::authenticode_sha256(File::open(&args[1])?)?;
         write!(out, "PE SHA-256: ")?;
         for byte in hash {
             write!(out, "{byte:02x}")?;
@@ -344,7 +342,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if command == "list-catalog-ids" {
         let (algorithm, identifiers) =
-            rust_image_tool::catalog::subject_identifiers(File::open(&args[1])?)?;
+            usg_wimtools::catalog::subject_identifiers(File::open(&args[1])?)?;
         writeln!(out, "Subject algorithm OID: {algorithm}")?;
         for id in &identifiers {
             for byte in id {
@@ -360,7 +358,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if command == "inspect-catalog" {
-        let report = rust_image_tool::catalog::inspect(File::open(&args[1])?)?;
+        let report = usg_wimtools::catalog::inspect(File::open(&args[1])?)?;
         writeln!(
             out,
             "Content type OID: {}\nDigest algorithm OIDs: {}\nCertificate records: {}\nSigner records: {}",
@@ -380,7 +378,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("expected WIM, image path, replacement file, and output WIM".into());
         }
         let path = args[2].to_str().ok_or("invalid image path")?;
-        rust_image_tool::replace_file(
+        usg_wimtools::replace_file(
             std::path::Path::new(&args[1]),
             path,
             std::path::Path::new(&args[3]),
@@ -398,8 +396,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         let id = args[2].to_str().ok_or("invalid hardware ID")?;
         let build: u32 = args[3].to_str().ok_or("invalid Windows build")?.parse()?;
-        let result = rust_image_tool::manifest::create(std::path::Path::new(&args[1]), id, build)?;
-        rust_image_tool::manifest::save_new(std::path::Path::new(&args[4]), &result)?;
+        let result = usg_wimtools::manifest::create(std::path::Path::new(&args[1]), id, build)?;
+        usg_wimtools::manifest::save_new(std::path::Path::new(&args[4]), &result)?;
         writeln!(
             out,
             "Snapshot created for {} files; catalog trust and package completeness NOT verified.",
@@ -414,8 +412,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if args.len() != 3 {
             return Err("expected package directory and manifest path".into());
         }
-        let result = rust_image_tool::manifest::load(std::path::Path::new(&args[2]))?;
-        let count = rust_image_tool::manifest::verify(std::path::Path::new(&args[1]), &result)?;
+        let result = usg_wimtools::manifest::load(std::path::Path::new(&args[2]))?;
+        let count = usg_wimtools::manifest::verify(std::path::Path::new(&args[1]), &result)?;
         writeln!(
             out,
             "Snapshot matches {count} files and current audit; catalog trust and package completeness NOT verified."
@@ -428,8 +426,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         let id = args[2].to_str().ok_or("invalid hardware ID")?;
         let build: u32 = args[3].to_str().ok_or("invalid Windows build")?.parse()?;
-        let report =
-            rust_image_tool::inf::audit_package(std::path::Path::new(&args[1]), id, build)?;
+        let report = usg_wimtools::inf::audit_package(std::path::Path::new(&args[1]), id, build)?;
         writeln!(
             out,
             "Candidate: {}\nModels: {}\nInstall base: {}",
@@ -464,7 +461,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let id = args[2].to_str().ok_or("invalid hardware ID")?;
         let build: u32 = args[3].to_str().ok_or("invalid Windows build")?.parse()?;
         let report =
-            rust_image_tool::inf::model_candidates(std::path::Path::new(&args[1]), id, build)?;
+            usg_wimtools::inf::model_candidates(std::path::Path::new(&args[1]), id, build)?;
         writeln!(
             out,
             "{} model candidate(s) for x64 Windows 10.0 build {build}.",
@@ -507,12 +504,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         File::open(&args[1])?
             .take(128 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
-        let hive = rust_image_tool::registry::Hive::parse(bytes)?;
+        let hive = usg_wimtools::registry::Hive::parse(bytes)?;
         let key = args[2].to_str().ok_or("invalid registry path")?;
         let name = args[3].to_str().ok_or("invalid registry value name")?;
         let number: u32 = args[4].to_str().ok_or("invalid DWORD")?.parse()?;
         let updated = hive.replace_inline_dword(key, name, number)?;
-        rust_image_tool::registry::save_new(std::path::Path::new(&args[5]), &updated)?;
+        usg_wimtools::registry::save_new(std::path::Path::new(&args[5]), &updated)?;
         writeln!(
             out,
             "Created experimental hive copy with one inline DWORD changed; Windows loading is not verified."
@@ -528,7 +525,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         File::open(&args[1])?
             .take(128 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
-        let hive = rust_image_tool::registry::Hive::parse(bytes)?;
+        let hive = usg_wimtools::registry::Hive::parse(bytes)?;
         let path = args[2].to_str().ok_or("invalid registry path")?;
         let key = hive.key(path)?;
         if command == "hive-list" {
@@ -579,9 +576,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if command == "inspect-inf" || command == "scan-drivers" {
         let (items, skipped) = if command == "inspect-inf" {
             (
-                vec![rust_image_tool::inf::inspect(std::path::Path::new(
-                    &args[1],
-                ))?],
+                vec![usg_wimtools::inf::inspect(std::path::Path::new(&args[1]))?],
                 0,
             )
         } else {
@@ -589,7 +584,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .get(2)
                 .map(|s| s.to_str().ok_or("invalid hardware ID encoding"))
                 .transpose()?;
-            rust_image_tool::inf::scan(std::path::Path::new(&args[1]), id)?
+            usg_wimtools::inf::scan(std::path::Path::new(&args[1]), id)?
         };
         writeln!(
             out,
@@ -627,7 +622,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if command == "export-image" {
         let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
-        rust_image_tool::export_one(
+        usg_wimtools::export_one(
             std::path::Path::new(&args[1]),
             std::path::Path::new(&args[3]),
             index,
@@ -678,7 +673,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let index: u32 = args[2].to_str().ok_or("invalid image index")?.parse()?;
             let path = args[3].to_str().ok_or("invalid image path")?;
             let metadata = wim.image_metadata(index)?;
-            let entry = rust_image_tool::find_image_path(&metadata, path)?;
+            let entry = usg_wimtools::find_image_path(&metadata, path)?;
             if entry.attributes & (0x10 | 0x400) != 0 {
                 return Err("requested path is a directory or reparse point".into());
             }

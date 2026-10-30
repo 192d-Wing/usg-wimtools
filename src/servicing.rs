@@ -180,7 +180,10 @@ mod tests {
                 architecture: 9,
                 major: 10,
                 minor: 0,
-                build: 26300
+                build: 26300,
+                edition: "Professional".into(),
+                installation_type: "Client".into(),
+                product_type: "WinNT".into(),
             }
         );
         let snapshot: crate::manifest::Manifest = serde_json::from_str(r#"{"schema":1,"inf":"a.inf","hardware_id":"EXAMPLE","windows_build":26300,"model_section":"x","install_section":"x","files":[],"warnings":[],"trust_status":"NOT_VERIFIED"}"#).unwrap();

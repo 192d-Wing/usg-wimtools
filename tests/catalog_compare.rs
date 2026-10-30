@@ -1,4 +1,4 @@
-use rust_image_tool::{catalog, pe};
+use usg_wimtools::{catalog, pe};
 fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     let mut v = vec![tag];
     if content.len() < 128 {
@@ -268,9 +268,9 @@ fn compares_exact_inf_bytes_without_claiming_windows_membership() {
 
 #[test]
 fn package_audit_reports_unchecked_files_and_changed_snapshot() {
-    use rust_image_tool::{manifest, package_check};
     use sha2::{Digest, Sha256};
     use std::fs;
+    use usg_wimtools::{manifest, package_check};
     let root = std::env::temp_dir().join(format!("catalog-package-test-{}", std::process::id()));
     fs::create_dir(&root).unwrap();
     let inf = b"[Version]\nCatalogFile=driver.cat\n[Manufacturer]\n%v%=Models,NTamd64.10.0...19041\n[Models.NTamd64.10.0...19041]\n%d%=Install,PCI\\VEN_1234&DEV_5678\n[Install.NTamd64]\nCopyFiles=@driver.sys\n[SourceDisksNames]\n1=Disk,,,\n[SourceDisksFiles.amd64]\ndriver.sys=1\nnotes.txt=1\n[Strings]\nv=Vendor\nd=Device\n";
