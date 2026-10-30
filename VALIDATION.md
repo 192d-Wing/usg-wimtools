@@ -69,3 +69,12 @@ These checks do not establish source authenticity or prove Windows Setup will
 accept or boot the image. The export has no added Dell drivers. Automated tests
 include synthetic export, metadata-cycle rejection, missing-index handling,
 source preservation, and destination no-overwrite behavior.
+
+## Dell INF scan
+
+The Rust scanner inspected the user's extracted QxM1250 JHY83 A07 pack and
+reported 255 INF files. A search for the illustrative hardware ID
+`PCI\VEN_8086&DEV_7D0B` found the RST VMD controller and extension INFs.
+The local Dell hardware ID and firmware configuration were not available;
+this does not establish device applicability. The tool does not resolve all
+INF directives or validate signatures, and no drivers were staged or injected.

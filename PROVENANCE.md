@@ -58,3 +58,9 @@ driver package extraction, or driver-injection compatibility is claimed.
 
 XML parsing uses the pure-Rust crates `roxmltree` and `memchr` under their
 respective open-source licenses; dependency versions are locked in Cargo.lock.
+
+INF inventory is an independently implemented, read-only approximation based on
+observed INF text. It does not implement Windows selection or staging. Relevant
+Microsoft references include:
+https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-store
+https://learn.microsoft.com/en-us/windows-hardware/drivers/install/catalog-files

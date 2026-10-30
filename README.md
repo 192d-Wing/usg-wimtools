@@ -18,6 +18,8 @@ cargo run -- check-structure /path/to/install.wim
 cargo run -- verify-resource /path/to/install.wim 0
 cargo run -- extract-file /path/to/install.wim 6 Windows/System32/notepad.exe ./notepad.exe
 cargo run -- export-image /path/to/install.wim 6 ./windows11-pro.wim
+cargo run -- inspect-inf /path/to/iaStorVD.inf
+cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
 ```
 
 Quote paths containing spaces. These commands also work in PowerShell with
@@ -69,6 +71,23 @@ power-loss recovery or protect against concurrent source changes after compariso
 The exporter is experimental. Its output passed an independent resource check
 for one Windows 11 Pro WIM, but Windows Setup, booting and driver servicing have
 not been tested. No authenticity check is performed.
+
+`inspect-inf` lists basic INF version fields, declared catalogs, raw Include
+and Needs directives, and candidate hardware IDs. `scan-drivers` recursively
+inventories INF files without following symbolic links; an optional hardware ID
+filters for an exact ASCII case-insensitive textual candidate. The example ID is
+illustrative, not evidence about the target machine. Both commands are read-only.
+They do not evaluate Windows model sections, target architecture or OS-version
+decorations, string substitutions, compatible-ID ranking, catalog signatures, or
+the full dependency graph. IDs from any INF section are candidates only, so
+results may include false positives and may miss substituted IDs. Non-ASCII
+legacy text is decoded lossily and flagged. A skipped symlink is reported, and
+an unreadable or malformed INF stops the scan. UTF-16 and UTF-8 BOMs are handled.
+
+There is no driver staging or injection command. Completing that work requires
+safe WIM file modifications, registry-hive servicing, driver-store behavior,
+catalog trust handling, and Windows deployment testing. Do not use the scanner
+as an installation or compatibility decision on its own.
 
 ## Development
 

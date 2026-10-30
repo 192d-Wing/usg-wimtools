@@ -565,3 +565,5 @@ pub fn find_image_path(metadata: &[u8], path: &str) -> io::Result<DirectoryEntry
 
 mod export;
 pub use export::export_one;
+
+pub mod inf;
