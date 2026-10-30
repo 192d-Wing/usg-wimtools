@@ -418,6 +418,128 @@ pub fn verify_embedded_signer(reader: impl Read) -> io::Result<()> {
         .map_err(|_| bad("catalog signer signature mismatch"))
 }
 
+struct CertificateParts<'a> {
+    tbs: &'a [u8],
+    issuer: &'a [u8],
+    subject: &'a [u8],
+    serial: &'a [u8],
+    spki: &'a [u8],
+    algorithm: &'a [u8],
+    signature: &'a [u8],
+}
+fn certificate_parts(raw: &[u8]) -> io::Result<CertificateParts<'_>> {
+    let mut cert = only(raw, 0x30)?;
+    let tbs = raw_element(&mut cert, 0x30)?;
+    let algorithm = raw_element(&mut cert, 0x30)?;
+    let bits = element(&mut cert, 3)?;
+    if !cert.is_empty() || bits.len() < 2 || bits[0] != 0 {
+        return Err(bad("invalid certificate signature"));
+    }
+    let mut fields = only(tbs, 0x30)?;
+    if fields.first() == Some(&0xa0) {
+        element(&mut fields, 0xa0)?;
+    }
+    let serial = raw_element(&mut fields, 2)?;
+    let inner_algorithm = raw_element(&mut fields, 0x30)?;
+    if inner_algorithm != algorithm {
+        return Err(bad("certificate signature algorithms differ"));
+    }
+    let issuer = raw_element(&mut fields, 0x30)?;
+    element(&mut fields, 0x30)?;
+    let subject = raw_element(&mut fields, 0x30)?;
+    let spki = raw_element(&mut fields, 0x30)?;
+    Ok(CertificateParts {
+        tbs,
+        issuer,
+        subject,
+        serial,
+        spki,
+        algorithm,
+        signature: &bits[1..],
+    })
+}
+/// Verify the catalog signer and the signature of its certificate using an
+/// embedded issuer certificate. No certificate or trust policy is evaluated.
+pub fn verify_embedded_issuer(reader: impl Read) -> io::Result<()> {
+    use rsa::{
+        RsaPublicKey,
+        pkcs1v15::{Signature, VerifyingKey},
+        pkcs8::DecodePublicKey,
+        signature::Verifier,
+        traits::PublicKeyParts,
+    };
+    let mut data = Vec::new();
+    reader.take(LIMIT + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > LIMIT {
+        return Err(bad("catalog exceeds 16 MiB limit"));
+    }
+    verify_embedded_signer(&data[..])?;
+    let mut outer = only(&data, 0x30)?;
+    element(&mut outer, 6)?;
+    let mut signed = only(element(&mut outer, 0xa0)?, 0x30)?;
+    element(&mut signed, 2)?;
+    element(&mut signed, 0x31)?;
+    element(&mut signed, 0x30)?;
+    let mut certificates = element(&mut signed, 0xa0)?;
+    let mut certs = Vec::new();
+    while !certificates.is_empty() {
+        let raw = raw_element(&mut certificates, 0x30)?;
+        certs.push(certificate_parts(raw)?);
+        if certs.len() > 64 {
+            return Err(bad("too many certificates"));
+        }
+    }
+    if signed.first() == Some(&0xa1) {
+        element(&mut signed, 0xa1)?;
+    }
+    let mut signer = only(element(&mut signed, 0x31)?, 0x30)?;
+    element(&mut signer, 2)?;
+    let mut id = element(&mut signer, 0x30)?;
+    let issuer = raw_element(&mut id, 0x30)?;
+    let serial = raw_element(&mut id, 2)?;
+    if !id.is_empty() {
+        return Err(bad("invalid signer identifier"));
+    }
+    let mut leaves = certs
+        .iter()
+        .filter(|c| c.issuer == issuer && c.serial == serial);
+    let leaf = leaves
+        .next()
+        .ok_or_else(|| bad("signer certificate not found"))?;
+    if leaves.next().is_some() {
+        return Err(bad("ambiguous signer certificates"));
+    }
+    let mut issuers = certs
+        .iter()
+        .filter(|c| c.subject == leaf.issuer && !std::ptr::eq(*c, leaf));
+    let parent = issuers
+        .next()
+        .ok_or_else(|| bad("embedded issuer certificate not found"))?;
+    if issuers.next().is_some() {
+        return Err(bad("ambiguous embedded issuer certificates"));
+    }
+    let mut algorithm = only(leaf.algorithm, 0x30)?;
+    if oid(element(&mut algorithm, 6)?)? != "1.2.840.113549.1.1.11" {
+        return Err(bad("unsupported certificate signature algorithm"));
+    }
+    if !algorithm.is_empty() && !element(&mut algorithm, 5)?.is_empty() {
+        return Err(bad("invalid certificate signature parameters"));
+    }
+    if !algorithm.is_empty() || parent.spki.len() > 2048 {
+        return Err(bad("unsupported certificate signature or key"));
+    }
+    let key = RsaPublicKey::from_public_key_der(parent.spki)
+        .map_err(|_| bad("unsupported issuer public key"))?;
+    if !(2048..=4096).contains(&key.n().bits()) {
+        return Err(bad("unsupported issuer RSA key size"));
+    }
+    let signature =
+        Signature::try_from(leaf.signature).map_err(|_| bad("invalid certificate signature"))?;
+    VerifyingKey::<Sha256>::new(key)
+        .verify(leaf.tbs, &signature)
+        .map_err(|_| bad("signer certificate signature mismatch"))
+}
+
 /// Compare an experimental PE SHA-256 digest with identifiers in a V2 catalog.
 /// A match is unauthenticated and does not establish Windows membership or trust.
 pub fn compare_pe(catalog: impl Read, image: impl Read) -> io::Result<PeComparison> {
