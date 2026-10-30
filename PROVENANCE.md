@@ -57,7 +57,9 @@ was corrected and a synthetic regression test was added. No Windows boot,
 driver package extraction, or driver-injection compatibility is claimed.
 
 XML parsing uses the pure-Rust crates `roxmltree` and `memchr` under their
-respective open-source licenses; dependency versions are locked in Cargo.lock.
+respective open-source licenses. The manifest implementation also uses Rust
+crates `sha2`, `serde`, and `serde_json`; dependency versions are locked in
+Cargo.lock.
 
 INF inventory is an independently implemented, read-only approximation based on
 observed INF text. It does not implement Windows selection or staging. Relevant
@@ -69,6 +71,7 @@ https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-strings-s
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-sourcedisksfiles-section
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-sourcedisksnames-section
 https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-copyfiles-directive
+https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-store
 
 The read-only REGF parser was independently implemented using the public format
 description at https://github.com/libyal/libregf/blob/main/documentation/Windows%20NT%20Registry%20File%20%28REGF%29%20format.asciidoc

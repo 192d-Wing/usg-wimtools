@@ -496,7 +496,7 @@ pub struct PackageAudit {
 
 // Source media paths are interpreted relative to the INF directory. Do not
 // follow links, accept parent traversal, drive paths, or ambiguous case matches.
-fn find_relative(root: &Path, parts: &[String]) -> io::Result<Option<PathBuf>> {
+pub(crate) fn find_relative(root: &Path, parts: &[String]) -> io::Result<Option<PathBuf>> {
     let mut at = root.to_owned();
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() || part == "." || part == ".." || part.contains(['/', '\\', ':']) {

@@ -96,6 +96,14 @@ or establish complete package dependency closure. Synthetic tests cover
 case-insensitive resolution, missing files, undeclared CopyFiles entries,
 external dependencies, and unsafe source paths.
 
+The manifest prototype snapshotted the same RST INF, catalog, and three
+declared source files for the illustrative hardware ID and build. It re-read
+and matched all five records. The `iaStorVD.sys` SHA-256 also matched macOS
+`shasum -a 256`. Synthetic tests cover altered or missing files, omitted and
+duplicate records, path traversal, and refusing to overwrite a manifest.
+The manifest itself is not signed and the catalog signature and membership
+have not been verified. The hardware ID is an example, not a discovered device.
+
 ## Read-only registry inspection
 
 The tool extracted the 10 MiB SYSTEM hive from exported Windows 11 Pro image 1,

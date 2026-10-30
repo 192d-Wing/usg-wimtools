@@ -2,9 +2,9 @@
 
 An independent, pure Rust foundation for portable Windows image tooling.
 Targets macOS, Linux, and Windows. Requires Rust 1.99, edition 2024.
-The XML parser uses the pure-Rust `roxmltree` and `memchr` crates. The tool
-does not use native libraries, Windows servicing APIs, or subprocesses. Unsafe
-Rust is forbidden in this project's code.
+The tool uses Rust crates for XML and JSON parsing and SHA-256 hashing. It does
+not use native libraries, Windows servicing APIs, or subprocesses. Unsafe Rust
+is forbidden in this project's code.
 
 ## Current milestone
 
@@ -23,6 +23,8 @@ cargo run -- inspect-inf /path/to/iaStorVD.inf
 cargo run -- scan-drivers /path/to/extracted-drivers 'PCI\VEN_8086&DEV_7D0B'
 cargo run -- match-inf /path/to/iaStorVD.inf 'PCI\VEN_8086&DEV_7D0B' 26300
 cargo run -- audit-inf /path/to/iaStorVD.inf 'PCI\VEN_8086&DEV_7D0B' 26300
+cargo run -- manifest-inf /path/to/iaStorVD.inf 'PCI\VEN_8086&DEV_7D0B' 26300 ./rst-manifest.json
+cargo run -- verify-manifest /path/to/package-directory ./rst-manifest.json
 cargo run -- hive-list /path/to/SYSTEM Select
 cargo run -- hive-get /path/to/SYSTEM Select Current
 cargo run -- hive-copy-set-dword /path/to/test.hive Example ValueName 42 ./test-copy.hive
@@ -126,6 +128,20 @@ would select. Cabinet fallback, CopyINF, external INF dependencies, catalog
 selection and signatures, and complete dependency closure remain unimplemented.
 Warnings and present files are not a certification that the package can be
 installed or staged. This is a read-only audit.
+
+`manifest-inf` snapshots the INF and the files identified by `audit-inf`, using
+relative paths, sizes, and SHA-256 hashes. Missing files prevent creation.
+`verify-manifest` checks those hashes and re-runs the audit to compare the file
+set and candidate model. Manifest paths are restricted to the supplied package
+directory, and a new manifest never overwrites an existing destination. Snapshot
+publication requires hard-link support; forced termination can leave a temporary
+file. Concurrent changes are not fully prevented.
+
+The manifest is **not signed** and does not verify the catalog's contents,
+signature, certificate chain, trust policy, dependency closure, or target
+hardware. A match only shows consistency with the saved snapshot and this tool's
+limited audit; an attacker who changes both package and manifest can create a
+matching pair. Do not use it as authorization to stage a driver.
 
 There is no driver staging or injection command. Completing that work requires
 safe WIM file modifications, registry-hive servicing, driver-store behavior,

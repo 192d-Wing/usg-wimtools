@@ -572,3 +572,5 @@ pub use export::{export_one, replace_file};
 pub mod inf;
 
 pub mod registry;
+
+pub mod manifest;

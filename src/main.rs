@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
+const HELP: &str = "rust-image-tool 0.1.0 — read-only WIM inspection\n\nUsage:\n  rust-image-tool info <image.wim>\n  rust-image-tool xml <image.wim>\n  rust-image-tool check-structure <image.wim>\n  rust-image-tool verify-resource <image.wim> <lookup-index>\n  rust-image-tool extract-resource <image.wim> <lookup-index> <output>\n  rust-image-tool extract-file <image.wim> <image-index> <image-path> <output>\n  rust-image-tool export-image <image.wim> <image-index> <output.wim>\n  rust-image-tool replace-file <image.wim> <image-path> <replacement-file> <new.wim>\n  rust-image-tool inspect-inf <file.inf>\n  rust-image-tool match-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool audit-inf <file.inf> <hardware-id> <windows-build>\n  rust-image-tool manifest-inf <file.inf> <hardware-id> <windows-build> <manifest.json>\n  rust-image-tool verify-manifest <package-directory> <manifest.json>\n  rust-image-tool scan-drivers <directory> [hardware-id]\n  rust-image-tool hive-list <hive-file> <key-path>\n  rust-image-tool hive-get <hive-file> <key-path> <value-name>\n  rust-image-tool hive-copy-set-dword <hive-file> <key-path> <value-name> <decimal> <new-hive>\n\nStructural checks do not verify hashes, compressed data, or bootability.\nExport and file replacement are experimental. Driver injection is not implemented.";
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
@@ -20,14 +20,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && !(args.len() == 3
             && (args[0] == "verify-resource"
                 || args[0] == "scan-drivers"
-                || args[0] == "hive-list"))
+                || args[0] == "hive-list"
+                || args[0] == "verify-manifest"))
         && !(args.len() == 4
             && (args[0] == "extract-resource"
                 || args[0] == "export-image"
                 || args[0] == "hive-get"
                 || args[0] == "match-inf"
                 || args[0] == "audit-inf"))
-        && !(args.len() == 5 && (args[0] == "extract-file" || args[0] == "replace-file"))
+        && !(args.len() == 5
+            && (args[0] == "extract-file"
+                || args[0] == "replace-file"
+                || args[0] == "manifest-inf"))
         && !(args.len() == 6 && args[0] == "hive-copy-set-dword")
     {
         return Err(format!("expected a command and image path\n\n{HELP}").into());
@@ -46,6 +50,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "inspect-inf"
             | "match-inf"
             | "audit-inf"
+            | "manifest-inf"
+            | "verify-manifest"
             | "scan-drivers"
             | "hive-list"
             | "hive-get"
@@ -69,6 +75,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         && command != "scan-drivers"
         && command != "match-inf"
         && command != "audit-inf"
+        && command != "manifest-inf"
+        && command != "verify-manifest"
         && command != "hive-list"
         && command != "hive-get"
         && command != "hive-copy-set-dword"
@@ -94,6 +102,36 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             out,
             "Experimental WIM created with a verified replacement; Windows deployment is not verified."
+        )?;
+        return Ok(());
+    }
+    if command == "manifest-inf" {
+        if args.len() != 5 {
+            return Err("expected INF path, hardware ID, build and manifest path".into());
+        }
+        let id = args[2].to_str().ok_or("invalid hardware ID")?;
+        let build: u32 = args[3].to_str().ok_or("invalid Windows build")?.parse()?;
+        let result = rust_image_tool::manifest::create(std::path::Path::new(&args[1]), id, build)?;
+        rust_image_tool::manifest::save_new(std::path::Path::new(&args[4]), &result)?;
+        writeln!(
+            out,
+            "Snapshot created for {} files; catalog trust and package completeness NOT verified.",
+            result.files.len()
+        )?;
+        for warning in result.warnings {
+            writeln!(out, "WARNING: {warning}")?;
+        }
+        return Ok(());
+    }
+    if command == "verify-manifest" {
+        if args.len() != 3 {
+            return Err("expected package directory and manifest path".into());
+        }
+        let result = rust_image_tool::manifest::load(std::path::Path::new(&args[2]))?;
+        let count = rust_image_tool::manifest::verify(std::path::Path::new(&args[1]), &result)?;
+        writeln!(
+            out,
+            "Snapshot matches {count} files and current audit; catalog trust and package completeness NOT verified."
         )?;
         return Ok(());
     }
